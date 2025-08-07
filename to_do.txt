@@ -1,0 +1,87 @@
+
+
+
+
+
+how can i undo the delete?
+Successfully deleted column 'ID' from 431 records.
+
+create a restore button by time
+create a csv in the folder and mark time do a copy backup csv every 1 hour and rewrite the backup csv after 1 week
+and you can choose what data to restore and update the Database with the correct version diff.
+
+make option that you can read fron csv and update a full cloumn or insert column form csv by matching rows from each csv and if having a match update else write None
+
+
+move the login functionality to diffrent file named login_and_signup python file.
+user data base, admin can change password, send email to user after sign up
+
+
+
+
+remove reruns...
+make ui look better by relocate buttons###
+
+"☑️ Select All Visible" remove from filter_equipment to some function
+
+
+
+
+
+
+
+Add New Column to Equipment DB also for tech permissions?
+
+ 
+DONE: 
+#category options wil be read from Equipmen select options
+#when saving changes make sure it is working good - append uniq index by defualt
+#filter depend by filter
+
+#append the uuid also for Equipment Records
+#show index num
+#hide option of download csv for not admin                   only with AGrid
+#difine function for changing column name
+#save column state order button
+#######################################################
+user can only read data.
+tech can edit data! , add row, add column
+admin do all
+								Feature	Admin		Tech		Manager		Technician		User
+➕ Add New Column to Equipment DB	✅				✅				❌			❌			❌
+💾 Save Changes to Database			✅				✅				✅			✅			❌
+✏️ Rename Column in Equipment DB	✅				✅				❌			❌			❌
+#######################################################
+#finding duplicateed serials and delete them
+#for the button ✏️ Rename Column in Equipment DB 
+#the next Columns list should not be change because of the web functionality 
+#Columns_static_name_list = ["Category", "Vendor", "Location", "Serial", "uuid"]
+
+#serial must be uniqe
+#select all button after filtering check box
+#make 🔍Equipment_Filters: generic for all columns
+
+#why do i have  Total Records: 438 and i see less by the id\ id must be uniqe \ if there is a free number between 1 to max num, 
+#so when creatting a new row use the free numbers between else insert new row with max num +1.
+#itzik want it that way.
+
+
+
+
+
+
+
+
+
+
+
+###################################
+#remove the deploy button
+#"☑️ Select All Visible", "⬜ Clear Selection","🔄 Refresh Selection" move to top of  Equipment Records df
+
+###✏️ Rename Column in Equipment DB fixed
+
+####🗑️ Delete Column from Equipment DB add warning
+####make delete selected button to appere always
+#create git repo for the mongo app.py
+#remove 📋 2 row(s) selected

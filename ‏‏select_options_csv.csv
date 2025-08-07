@@ -1,0 +1,55 @@
+Category,Location,Vendor
+SCOPE,Haifa,Thermotron
+FUNCTION/SIGNAL,bench 7,KITHLEY
+DMM,Scondery Lab,synthesis reaserch
+Board,bench 23,FLUKE
+THERMAL TOOL,bench 11,EXTREM NETWORKS
+Other,Storeroom,TTI
+SOURCE METER,bench 18,ROHDE&SCHWARZ
+Logic Analysis,Lab storage,HP/AGILENT
+Logic analysis module,Retired,HOLZWORTH
+ANALYZER,bench 17,OTHER
+Cabels,bench 28,Anritsu
+SOLDER,bench 2,METCAL
+Clock Gen,bench 3,nan
+PROBE,bench 20,WILDER TECHNOLOGIES
+POWER SUPPLY,bench 25,STANFORD RESEARCH SYSTEMS
+,bench 12,KEYSIGHT
+,bench 22,Synopsys
+,bench 1,Intel
+,bench 5,GIGATRONICS
+,bench 26,WAVECREST
+,bench 10,MECHANICAL DEVICES
+,nan,HP/AGILENT/KEYSIGHT
+,Lidor,IXIA
+,bench 6,Noisecom
+,Daniel,Agilent
+,bench 30,ARTEK
+,bench 15,TEKTRONIX
+,bench 8,
+,bench 14,
+,bench 13,
+,bench 4,
+,in repair,
+,bench 27,
+,bench 29,
+,bench 19,
+,bench 12,KEYSIGHT
+,bench 22,Synopsys
+,bench 1,Intel
+,bench 5,GIGATRONICS
+,bench 26,WAVECREST
+,bench 10,MECHANICAL DEVICES
+,nan,HP/AGILENT/KEYSIGHT
+,Lidor,IXIA
+,bench 6,Noisecom
+,Daniel,Agilent
+,bench 30,ARTEK
+,bench 15,TEKTRONIX
+,bench 8,
+,bench 14,
+,bench 13,
+,bench 4,
+,in repair,
+,bench 27,
+,bench 29,

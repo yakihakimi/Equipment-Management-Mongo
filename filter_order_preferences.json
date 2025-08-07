@@ -1,0 +1,16 @@
+{
+  "equipment_filters": [
+    "Category",
+    "Vendor",
+    "Model",
+    "Serial",
+    "Description",
+    "ETAG",
+    "Last Cal Date",
+    "Next Cal Date",
+    "IP Address",
+    "Purchase Value",
+    "Year of Purchase",
+    "Location"
+  ]
+}

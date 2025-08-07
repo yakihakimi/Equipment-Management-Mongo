@@ -1,0 +1,27 @@
+{
+  "equipment": [
+    "Check Box",
+    "ID",
+    "Category",
+    "Vendor",
+    "Model",
+    "Serial",
+    "Description",
+    "ETAG",
+    "Last Cal Date",
+    "Next Cal Date",
+    "IP Address",
+    "Purchase Value",
+    "Year of Purchase",
+    "check",
+    "Location",
+    "Comments",
+    "uuid"
+  ],
+  "select_options": [
+    "Location",
+    "Category",
+    "Vendor",
+    "index"
+  ]
+}

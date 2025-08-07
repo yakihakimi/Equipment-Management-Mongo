@@ -1,0 +1,10 @@
+{
+  "backup_timestamp": "2025-08-07T13:35:58.239921",
+  "backup_interval_hours": 1,
+  "day_of_week": "thursday",
+  "equipment_records_count": 430,
+  "select_options_records_count": 35,
+  "equipment_file": "equipment_backup_20250807_133558.csv",
+  "select_options_file": "select_options_backup_20250807_133558.csv",
+  "backup_hash": "141d0ce8e12d0318f6c96c503827b930"
+}
