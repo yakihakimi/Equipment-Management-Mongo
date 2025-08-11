@@ -1,14 +1,50 @@
 {
-  "71d0e751-1553-44a7-9227-ecca11e1c12a": {
-    "username": "admin",
-    "role": "admin",
-    "timestamp": "2025-08-07T08:04:51.664077",
-    "session_token": "71d0e751-1553-44a7-9227-ecca11e1c12a"
-  },
   "b09b3bc2-31a3-497a-8ee8-7d135c768faf": {
     "username": "admin",
     "role": "admin",
     "timestamp": "2025-08-07T09:42:52.069635",
     "session_token": "b09b3bc2-31a3-497a-8ee8-7d135c768faf"
+  },
+  "b93607e6-10ca-4520-a8e4-e683f5d0d2e1": {
+    "username": "admin",
+    "role": "admin",
+    "timestamp": "2025-08-07T15:57:41.024270",
+    "session_token": "b93607e6-10ca-4520-a8e4-e683f5d0d2e1"
+  },
+  "3f5cf951-a249-466b-ac9e-e80351ce1f3f": {
+    "username": "yaki",
+    "role": "admin",
+    "timestamp": "2025-08-10T14:18:44.044610",
+    "session_token": "3f5cf951-a249-466b-ac9e-e80351ce1f3f"
+  },
+  "08fce124-adb3-4bae-8440-ebe6979a3545": {
+    "username": "yaki",
+    "role": "admin",
+    "timestamp": "2025-08-11T08:37:52.865768",
+    "session_token": "08fce124-adb3-4bae-8440-ebe6979a3545"
+  },
+  "3bcd0c76-f739-4124-ae5f-2d493d3e6f47": {
+    "username": "admin",
+    "role": "admin",
+    "timestamp": "2025-08-11T15:03:00.854952",
+    "session_token": "3bcd0c76-f739-4124-ae5f-2d493d3e6f47"
+  },
+  "4c9a2515-50dd-412b-a639-ec445ae5bccf": {
+    "username": "admin",
+    "role": "admin",
+    "timestamp": "2025-08-11T15:13:45.264333",
+    "session_token": "4c9a2515-50dd-412b-a639-ec445ae5bccf"
+  },
+  "88f3f0f1-480a-4ec1-b7b6-22a933881962": {
+    "username": "admin",
+    "role": "admin",
+    "timestamp": "2025-08-11T15:47:05.639221",
+    "session_token": "88f3f0f1-480a-4ec1-b7b6-22a933881962"
+  },
+  "650d148f-d8d2-45b1-a758-9827b66fa85a": {
+    "username": "admin",
+    "role": "admin",
+    "timestamp": "2025-08-11T15:48:26.104331",
+    "session_token": "650d148f-d8d2-45b1-a758-9827b66fa85a"
   }
 }

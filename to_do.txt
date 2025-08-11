@@ -2,26 +2,45 @@
 
 
 
+fix search filter
 
-how can i undo the delete?
-Successfully deleted column 'ID' from 431 records.
-
-create a restore button by time
-create a csv in the folder and mark time do a copy backup csv every 1 hour and rewrite the backup csv after 1 week
-and you can choose what data to restore and update the Database with the correct version diff.
-
-make option that you can read fron csv and update a full cloumn or insert column form csv by matching rows from each csv and if having a match update else write None
-
-
-move the login functionality to diffrent file named login_and_signup python file.
-user data base, admin can change password, send email to user after sign up
+DONE: when appending column to Equipment Select Options update the column that in the Equipment Records that can use only from the dropdown selecting - Auto-sync implemented with manual sync option
 
 
 
+
+get warning for 🗑️ Delete Column from Equipment Select Options DB befor deletion
+
+
+
+# for smat merge in the select options there is one row but still didnt recognize it
+# Records to Update
+
+# 0
+# Records to Insert
+
+# 35
+# Unchanged Records
+
+# 0
+# for the select options it should not have duplicates
+
+Equipment Select Options backup should save also index, or when inseting new data give it a new uuid
+
+remove prints:
+    Some rows were removed. Processing deletions...
+
+🔍 Filtered view detected - Only updating/adding records, not deleting filtered-out records for safety.
+
+
+
+when clicking on buttuon the web change color cause it is thinking or refreshing or doing rerun but the user can stil click on somthing else cause it is not changing the fu
 
 remove reruns...
 make ui look better by relocate buttons###
+add an option that if admin deny user signup it can send also a message with a reson for why the user got denyied
 
+clean the code:
 "☑️ Select All Visible" remove from filter_equipment to some function
 
 
@@ -29,7 +48,7 @@ make ui look better by relocate buttons###
 
 
 
-
+it is taking long time for tabs to load like 👥 User Management 
 Add New Column to Equipment DB also for tech permissions?
 
  
@@ -44,13 +63,13 @@ DONE:
 #difine function for changing column name
 #save column state order button
 #######################################################
-user can only read data.
-tech can edit data! , add row, add column
-admin do all
-								Feature	Admin		Tech		Manager		Technician		User
-➕ Add New Column to Equipment DB	✅				✅				❌			❌			❌
-💾 Save Changes to Database			✅				✅				✅			✅			❌
-✏️ Rename Column in Equipment DB	✅				✅				❌			❌			❌
+# user can only read data.
+# tech can edit data! , add row, add column
+# admin do all
+								# Feature	Admin		Tech		Manager		Technician		User
+# ➕ Add New Column to Equipment DB	✅				✅				❌			❌			❌
+# 💾 Save Changes to Database			✅				✅				✅			✅			❌
+# ✏️ Rename Column in Equipment DB	✅				✅				❌			❌			❌
 #######################################################
 #finding duplicateed serials and delete them
 #for the button ✏️ Rename Column in Equipment DB 
@@ -66,6 +85,44 @@ admin do all
 #itzik want it that way.
 
 
+# create a restore button by time
+# create a csv in the folder and mark time do a copy backup csv every 1 hour and rewrite the backup csv after 1 week
+# and you can choose what data to restore and update the Database with the correct version diff.
+
+# make option that you can read fron csv and update a full cloumn or insert column form csv by matching rows from each csv and if having a match update else write None
+# issue id is duplicated
+# how can i undo the delete?
+# Successfully deleted column 'ID' from 431 records.
+
+# move the login functionality to diffrent file named login_and_signup python file.
+
+#user data base
+# user data base, admin can change password, send email to user after sign up
+
+# i want to create a signup functionality in login_and_signup.py , 
+# the functionality need to include a write a valid email.
+# the admin can change password for users.
+# the signup need to get username that is not exist in the repo
+# the user can ask for permissions role like admin ,tech, manager and when the owner get the mail and aprove it the user get an email with some generated password
+# with lengh of 4 , then the user can login and press on a button for changing his password if he wants.
+# the email should be @altera.com so no need that the user will insert it and if he does so ignor what is after the @ and complete it with @altera.com
+# insert also a uuid for user to be uniqe
+# also add 
+# wwid from user
+# FirstName
+# LastName
+
+
+#Add New User tab for adding New Users from admin
+#a tab for Change User Password from admim
+
+
+#if user enter a password with spaces after the password remove the whitespaces 
+
+# add a button for cahnging user password after login for user dessision if he wants to change password
+# add a forgot my password button to sign in page so the user can reset is password if forgot
+
+# add for singup option a filling the password alredy
 
 
 

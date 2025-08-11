@@ -106,9 +106,8 @@ class DatabaseBackupRestore:
             select_options_df = pd.DataFrame(select_options_records)
             
             if not select_options_df.empty:
-                # Remove any index columns that might exist
-                if 'index' in select_options_df.columns:
-                    select_options_df = select_options_df.drop(columns=['index'])
+                # For Equipment Select Options, keep ALL columns including index (UUID)
+                # Don't remove the index column - it's needed for proper restoration
                 select_options_df.to_csv(select_options_backup_file, index=False, encoding='utf-8')
             
             # Create metadata
@@ -466,8 +465,16 @@ class DatabaseBackupRestore:
                 result = collection.delete_many({})
                 st.info(f"Cleared {result.deleted_count} existing records")
                 
-                # Insert backup data
+                # Prepare backup data for insertion
                 records = backup_df.to_dict('records')
+                
+                # For Equipment Select Options, ensure all records have proper index (UUID)
+                if collection_type == "select_options":
+                    import uuid
+                    for record in records:
+                        if 'index' not in record or not record['index'] or record['index'] in ['nan', 'None', '']:
+                            record['index'] = str(uuid.uuid4())
+                
                 if records:
                     collection.insert_many(records)
                 
@@ -494,9 +501,46 @@ class DatabaseBackupRestore:
             tuple: (success, message)
         """
         try:
+            import uuid  # Import uuid for generating new indices
+            
             # Get current data from database
             current_records = list(collection.find({}, {'_id': 0}))
             current_df = pd.DataFrame(current_records)
+            
+            # Special handling for Equipment Select Options to ensure proper UUID indices
+            if collection_type == "select_options":
+                # Ensure all backup records have proper index (UUID)
+                if 'index' not in backup_df.columns:
+                    # If backup doesn't have index column, create it
+                    backup_df['index'] = [str(uuid.uuid4()) for _ in range(len(backup_df))]
+                else:
+                    # Check for missing or invalid indices and assign new UUIDs
+                    missing_indices = backup_df['index'].isna() | (backup_df['index'] == 'nan') | (backup_df['index'] == 'None') | (backup_df['index'] == '') | backup_df['index'].isnull()
+                    if missing_indices.any():
+                        backup_df.loc[missing_indices, 'index'] = [str(uuid.uuid4()) for _ in range(missing_indices.sum())]
+                    
+                    # Convert index column to string for consistency
+                    backup_df['index'] = backup_df['index'].astype(str)
+            
+            # Find the best unique identifier column
+            unique_id_col = self._find_best_unique_identifier(backup_df, current_df, collection_type)
+            
+            # For Equipment Select Options, prefer 'index' as the unique identifier
+            if collection_type == "select_options" and 'index' in backup_df.columns:
+                unique_id_col = 'index'
+            
+            if not unique_id_col:
+                # If no unique identifier, fall back to inserting all backup records
+                # For Equipment Select Options, ensure each record has a unique index
+                records = backup_df.to_dict('records')
+                if collection_type == "select_options":
+                    for record in records:
+                        if 'index' not in record or not record['index'] or record['index'] in ['nan', 'None', '']:
+                            record['index'] = str(uuid.uuid4())
+                
+                if records:
+                    collection.insert_many(records)
+                return True, f"No unique identifier found. Inserted {len(records)} records (may contain duplicates)"
             
             # Find the best unique identifier column
             unique_id_col = self._find_best_unique_identifier(backup_df, current_df)
@@ -519,9 +563,26 @@ class DatabaseBackupRestore:
                 backup_record = backup_row.to_dict()
                 backup_id_value = backup_record.get(unique_id_col)
                 
-                if pd.isna(backup_id_value) or backup_id_value == "" or backup_id_value is None:
-                    # Skip records without valid unique identifier
-                    continue
+                # Check if backup record has a valid UUID
+                has_valid_uuid = not (pd.isna(backup_id_value) or backup_id_value == "" or backup_id_value is None or str(backup_id_value) in ['nan', 'None'])
+                
+                # For Equipment Select Options, handle records without UUID differently
+                if collection_type == "select_options":
+                    if not has_valid_uuid:
+                        # No valid UUID = new record, assign UUID and insert
+                        new_uuid = str(uuid.uuid4())
+                        backup_record['index'] = new_uuid
+                        collection.insert_one(backup_record)
+                        inserted_count += 1
+                        continue
+                    else:
+                        # Has valid UUID = existing record, update backup_id_value for comparison
+                        backup_id_value = backup_record.get('index', backup_id_value)
+                        unique_id_col = 'index'
+                else:
+                    # For Equipment records, skip if no valid identifier
+                    if not has_valid_uuid:
+                        continue
                 
                 # Find matching current record
                 if not current_df.empty and unique_id_col in current_df.columns:
@@ -568,19 +629,25 @@ class DatabaseBackupRestore:
         except Exception as e:
             return False, f"Smart merge failed: {str(e)}"
     
-    def _find_best_unique_identifier(self, backup_df, current_df):
+    def _find_best_unique_identifier(self, backup_df, current_df, collection_type=None):
         """
         Find the best unique identifier column that exists in both DataFrames.
         
         Args:
             backup_df (pandas.DataFrame): Backup data
             current_df (pandas.DataFrame): Current data
+            collection_type (str): Type of collection for special handling
         
         Returns:
             str or None: Best unique identifier column name
         """
+        # For Equipment Select Options, always prefer 'index' if it exists
+        if collection_type == "select_options" and 'index' in backup_df.columns:
+            return 'index'
+        
         # Priority order for unique identifiers
         priority_patterns = [
+            lambda col: col.lower() == 'index',  # Prioritize 'index' column for Equipment Select Options
             lambda col: col.lower() == 'id',
             lambda col: col.lower() == 'uuid',
             lambda col: col.lower().endswith('_id'),
@@ -599,6 +666,10 @@ class DatabaseBackupRestore:
         for pattern in priority_patterns:
             for col in common_cols:
                 if pattern(col):
+                    # For Equipment Select Options with 'index' column, be more lenient
+                    if collection_type == "select_options" and col.lower() == 'index':
+                        return col
+                    
                     # Verify this column has mostly unique values in backup data
                     unique_ratio = backup_df[col].nunique() / len(backup_df) if len(backup_df) > 0 else 0
                     if unique_ratio > 0.8:  # At least 80% unique values
@@ -689,7 +760,7 @@ class DatabaseBackupRestore:
             current_df = pd.DataFrame(current_records)
             
             # Find the best unique identifier column
-            unique_id_col = self._find_best_unique_identifier(backup_df, current_df)
+            unique_id_col = self._find_best_unique_identifier(backup_df, current_df, collection_type)
             
             if not unique_id_col:
                 return {
@@ -697,7 +768,8 @@ class DatabaseBackupRestore:
                     "update_count": 0,
                     "insert_count": len(backup_df),
                     "unchanged_count": 0,
-                    "unique_id_col": None
+                    "unique_id_col": None,
+                    "debug_info": f"Backup columns: {list(backup_df.columns)}, Current columns: {list(current_df.columns) if not current_df.empty else 'Empty'}"
                 }
             
             # Track changes
@@ -710,8 +782,23 @@ class DatabaseBackupRestore:
                 backup_record = backup_row.to_dict()
                 backup_id_value = backup_record.get(unique_id_col)
                 
-                if pd.isna(backup_id_value) or backup_id_value == "" or backup_id_value is None:
-                    continue
+                # Check if backup record has a valid UUID
+                has_valid_uuid = not (pd.isna(backup_id_value) or backup_id_value == "" or backup_id_value is None or str(backup_id_value) in ['nan', 'None'])
+                
+                # For Equipment Select Options, handle records without UUID differently
+                if collection_type == "select_options":
+                    if not has_valid_uuid:
+                        # No valid UUID = new record, will be assigned UUID and inserted
+                        inserts.append(backup_record)
+                        continue
+                    else:
+                        # Has valid UUID = existing record, use index for comparison
+                        backup_id_value = backup_record.get('index', backup_id_value)
+                        unique_id_col = 'index'
+                else:
+                    # For Equipment records, skip if no valid identifier
+                    if not has_valid_uuid:
+                        continue
                 
                 # Find matching current record
                 if not current_df.empty and unique_id_col in current_df.columns:
@@ -742,7 +829,19 @@ class DatabaseBackupRestore:
                 "unchanged_count": len(unchanged),
                 "unique_id_col": unique_id_col,
                 "update_samples": updates[:10],  # First 10 updates
-                "insert_samples": inserts[:10]   # First 10 inserts
+                "insert_samples": inserts[:10],   # First 10 inserts
+                "debug_info": {
+                    "backup_data_count": len(backup_df),
+                    "current_data_count": len(current_df),
+                    "backup_sample_ids": backup_df[unique_id_col].head(5).tolist() if unique_id_col in backup_df.columns else [],
+                    "current_sample_ids": current_df[unique_id_col].head(5).tolist() if not current_df.empty and unique_id_col in current_df.columns else [],
+                    "backup_columns": list(backup_df.columns),
+                    "current_columns": list(current_df.columns) if not current_df.empty else [],
+                    "unique_id_column": unique_id_col,
+                    "uuid_logic": f"Records without valid UUID ({collection_type}): treated as new inserts",
+                    "backup_uuid_count": backup_df[unique_id_col].count() if unique_id_col in backup_df.columns else 0,
+                    "backup_total_count": len(backup_df)
+                }
             }
             
             return preview
@@ -1125,6 +1224,20 @@ def backup_restore_ui(app_instance):
                                     if "insert_samples" in changes_preview:
                                         insert_df = pd.DataFrame(changes_preview["insert_samples"][:5])
                                         st.dataframe(insert_df, use_container_width=True)
+                                
+                                # Debug information
+                                if "debug_info" in changes_preview:
+                                    with st.expander("🔧 Debug Information"):
+                                        debug = changes_preview["debug_info"]
+                                        st.json({
+                                            "Unique ID Column": debug.get("unique_id_column"),
+                                            "UUID Logic": debug.get("uuid_logic"),
+                                            "Backup Records with UUID": f"{debug.get('backup_uuid_count', 0)} of {debug.get('backup_total_count', 0)}",
+                                            "Backup Sample IDs": debug.get("backup_sample_ids", []),
+                                            "Current Sample IDs": debug.get("current_sample_ids", []),
+                                            "Backup Count": debug.get("backup_data_count"),
+                                            "Current Count": debug.get("current_data_count")
+                                        })
                                 
                                 if changes_preview["update_count"] == 0 and changes_preview["insert_count"] == 0:
                                     st.success("✅ No changes needed - all backup data matches current data!")
