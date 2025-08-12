@@ -1,37 +1,30 @@
 
 
-
+append git ignore for pychach
 
 fix search filter
 
-DONE: when appending column to Equipment Select Options update the column that in the Equipment Records that can use only from the dropdown selecting - Auto-sync implemented with manual sync option
 
 
+append for Equipment Select Options
+Admin Downloads
+
+Web Management
+💾 Save Equipment Column Order
+
+🔧 Save Equipment Filter Order
 
 
-get warning for 🗑️ Delete Column from Equipment Select Options DB befor deletion
+#get warning for 🗑️ Delete Column from Equipment Select Options DB befor deletion
 
+# Equipment Select Options backup should save also index, or when inseting new data give it a new uuid
 
+# remove prints:
+    # Some rows were removed. Processing deletions...
 
-# for smat merge in the select options there is one row but still didnt recognize it
-# Records to Update
+# 🔍 Filtered view detected - Only updating/adding records, not deleting filtered-out records for safety.
 
-# 0
-# Records to Insert
-
-# 35
-# Unchanged Records
-
-# 0
-# for the select options it should not have duplicates
-
-Equipment Select Options backup should save also index, or when inseting new data give it a new uuid
-
-remove prints:
-    Some rows were removed. Processing deletions...
-
-🔍 Filtered view detected - Only updating/adding records, not deleting filtered-out records for safety.
-
+# DONE: when appending column to Equipment Select Options update the column that in the Equipment Records that can use only from the dropdown selecting - Auto-sync implemented with manual sync option
 
 
 when clicking on buttuon the web change color cause it is thinking or refreshing or doing rerun but the user can stil click on somthing else cause it is not changing the fu

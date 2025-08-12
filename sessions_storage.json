@@ -17,12 +17,6 @@
     "timestamp": "2025-08-10T14:18:44.044610",
     "session_token": "3f5cf951-a249-466b-ac9e-e80351ce1f3f"
   },
-  "08fce124-adb3-4bae-8440-ebe6979a3545": {
-    "username": "yaki",
-    "role": "admin",
-    "timestamp": "2025-08-11T08:37:52.865768",
-    "session_token": "08fce124-adb3-4bae-8440-ebe6979a3545"
-  },
   "3bcd0c76-f739-4124-ae5f-2d493d3e6f47": {
     "username": "admin",
     "role": "admin",
@@ -46,5 +40,11 @@
     "role": "admin",
     "timestamp": "2025-08-11T15:48:26.104331",
     "session_token": "650d148f-d8d2-45b1-a758-9827b66fa85a"
+  },
+  "90c07aaa-70cd-4f6d-b747-e223d3569319": {
+    "username": "admin",
+    "role": "admin",
+    "timestamp": "2025-08-12T08:18:07.442644",
+    "session_token": "90c07aaa-70cd-4f6d-b747-e223d3569319"
   }
 }
