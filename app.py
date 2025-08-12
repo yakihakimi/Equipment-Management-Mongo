@@ -4468,25 +4468,25 @@ class EquipmentManagementApp:
                         self.Equipment_select_options_Filters() 
 
                         # Column and Filter management for Equipment Select Options
-                        self.save_select_options_column_order_ui()
-                        self.save_select_options_filter_order_ui()
+
                         self.add_new_column_to_select_options_db()
                         self.rename_column_in_select_options_db_ui()
                         self.delete_column_from_select_options_db_ui()
                         
                         # Web Management section for Equipment Records
                         st.markdown("### Web Management")
-                        
+                        self.save_select_options_column_order_ui()
+                        self.save_select_options_filter_order_ui()
                         # Equipment Records Column and Filter Order Management
-                        col1, col2 = st.columns(2)
-                        
-                        with col1:
-                            if st.button("💾 Save Equipment Column Order", key="save_eq_column_order_select_options"):
-                                self.save_equipment_column_order_ui()
-                        
-                        with col2:
-                            if st.button("🔧 Save Equipment Filter Order", key="save_eq_filter_order_select_options"):
-                                self.save_equipment_filter_order_ui()
+                        # col1, col2 = st.columns(2)
+                        # 
+                        # with col1:
+                        #     if st.button("💾 Save Equipment Column Order", key="save_eq_column_order_select_options"):
+                        #         self.save_equipment_column_order_ui()
+                        # 
+                        # with col2:
+                        #     if st.button("🔧 Save Equipment Filter Order", key="save_eq_filter_order_select_options"):
+                        #         self.save_equipment_filter_order_ui()
 
                     # st.dataframe(
                     #     self.Equipment_select_options_db_df,
