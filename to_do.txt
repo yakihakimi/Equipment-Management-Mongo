@@ -1,18 +1,22 @@
 
 
-append git ignore for pychach
 
-fix search filter
+fix filter
+still have old search
+fff
+
+All
+bbb
 
 
 
 append for Equipment Select Options
 Admin Downloads
 
-Web Management
-💾 Save Equipment Column Order
+    # Web Management
+    # 💾 Save Equipment Column Order
 
-🔧 Save Equipment Filter Order
+    # 🔧 Save Equipment Filter Order
 
 
 #get warning for 🗑️ Delete Column from Equipment Select Options DB befor deletion
@@ -135,3 +139,4 @@ DONE:
 ####make delete selected button to appere always
 #create git repo for the mongo app.py
 #remove 📋 2 row(s) selected
+# append git ignore for __pycache__

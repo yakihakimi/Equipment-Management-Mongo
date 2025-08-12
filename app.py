@@ -1317,8 +1317,8 @@ class EquipmentManagementApp:
         
         # Add sequential ID column if it doesn't exist
         if 'ID' not in self.Equipment_select_options_db_df.columns:
-            # Create sequential ID starting from 1
-            self.Equipment_select_options_db_df['ID'] = range(1, len(self.Equipment_select_options_db_df) + 1)
+            # Create sequential ID starting from 1, convert to regular Python int
+            self.Equipment_select_options_db_df['ID'] = [int(i) for i in range(1, len(self.Equipment_select_options_db_df) + 1)]
             # Batch update records in the database with the new ID
             updates = []
             for idx, row in self.Equipment_select_options_db_df.iterrows():
@@ -1337,7 +1337,7 @@ class EquipmentManagementApp:
         else:
             # Ensure ID column has proper sequential values
             if self.Equipment_select_options_db_df['ID'].isna().any() or self.Equipment_select_options_db_df['ID'].duplicated().any():
-                self.Equipment_select_options_db_df['ID'] = range(1, len(self.Equipment_select_options_db_df) + 1)
+                self.Equipment_select_options_db_df['ID'] = [int(i) for i in range(1, len(self.Equipment_select_options_db_df) + 1)]
                 # Batch update records in database
                 updates = []
                 for idx, row in self.Equipment_select_options_db_df.iterrows():
@@ -1404,6 +1404,18 @@ class EquipmentManagementApp:
             # Clear refresh flag if it was set
             if 'force_refresh_select_options' in st.session_state:
                 del st.session_state['force_refresh_select_options']
+
+    def _prepare_display_data_select_options(self):
+        """
+        Prepare Equipment Select Options data for display by applying column order.
+        Returns:
+            pandas.DataFrame: DataFrame with columns in saved order
+        """
+        if not hasattr(self, 'Equipment_select_options_db_df') or self.Equipment_select_options_db_df is None:
+            return pd.DataFrame()
+        
+        # Apply column order and return the prepared data
+        return self._apply_column_order(self.Equipment_select_options_db_df, 'select_options')
 
     def _load_and_sync_data_on_startup(self):
         """
@@ -2603,6 +2615,10 @@ class EquipmentManagementApp:
                 st.info("No select options data available")
 
     def Equipment_select_options_Filters(self):
+        # Initialize session state to reduce notification noise during cell selection
+        if 'show_selection_messages' not in st.session_state:
+            st.session_state['show_selection_messages'] = False  # Reduce notification noise
+        
         # --- Inline filter column (not sidebar) ---
         # Print the current filter state
         st.markdown('**🔍Equipment_select_options Filters:**')
@@ -2742,14 +2758,13 @@ class EquipmentManagementApp:
             col1, col2, col3, col4 = st.columns([1, 1, 1, 2])
             with col1:
                 if st.button("☑️ Select All Visible", key="select_all_select_options_btn", help="Select all rows currently visible (after all filtering) - selection will be maintained when filtering"):
-                    # Store only the currently visible/filtered rows in session state
+                    # Store the selection data
                     st.session_state['select_all_select_options_rows'] = self.display_select_options_df.to_dict('records')
-                    # Also store the visible data as our working dataset when in select all mode
                     st.session_state['select_all_select_options_active'] = True
-                    # Force grid reload and increment key to force visual update
                     st.session_state['force_select_options_grid_reload'] = True
                     st.session_state['select_options_grid_key'] = st.session_state.get('select_options_grid_key', 0) + 1
-                    # st.rerun()
+                    # Ensure we stay on the current page after rerun
+                    st.session_state['current_page'] = "Equipment Select Options"
             
             with col2:
                 if st.button("⬜ Clear Selection", key="clear_selection_select_options_btn", help="Clear all selected rows"):
@@ -2758,6 +2773,9 @@ class EquipmentManagementApp:
                         del st.session_state['select_all_select_options_rows']
                     if 'select_all_select_options_active' in st.session_state:
                         del st.session_state['select_all_select_options_active']
+                    # Force grid reload and increment key to force visual update
+                    st.session_state['force_select_options_grid_reload'] = True
+                    st.session_state['select_options_grid_key'] = st.session_state.get('select_options_grid_key', 0) + 1
                     # Force grid reload and increment key to force visual update
                     st.session_state['force_select_options_grid_reload'] = True
                     st.session_state['select_options_grid_key'] = st.session_state.get('select_options_grid_key', 0) + 1
@@ -2786,7 +2804,9 @@ class EquipmentManagementApp:
                 sortable=True, 
                 filter=True,
                 flex=1,  # Enable flexible column sizing
-                minWidth=80  # Set minimum width for all columns
+                minWidth=80,  # Set minimum width for all columns
+                singleClickEdit=True,  # Enable single-click editing for better responsiveness
+                stopEditingWhenCellsLoseFocus=True  # Save edits when cell loses focus
             )
             
             # Configure specific columns with flexible sizing
@@ -2889,7 +2909,13 @@ class EquipmentManagementApp:
                 gb.configure_grid_options(
                     enableRangeSelection=True,
                     rowSelection='multiple',
-                    suppressRowClickSelection=False
+                    suppressRowClickSelection=False,
+                    suppressCellSelection=False,  # Allow cell selection without triggering rerun
+                    suppressRowDeselection=False,
+                    suppressMultiRangeSelection=False,
+                    stopEditingWhenCellsLoseFocus=True,  # Auto-save when losing focus
+                    undoRedoCellEditing=True,  # Enable undo/redo for better UX
+                    undoRedoCellEditingLimit=20  # Limit undo history
                 )
             
             # Check for select all mode and force grid reload if needed
@@ -2913,7 +2939,7 @@ class EquipmentManagementApp:
                 grid_data,
                 gridOptions=gb.build(),
                 data_return_mode=DataReturnMode.FILTERED_AND_SORTED,
-                update_mode=GridUpdateMode.MODEL_CHANGED,
+                update_mode=GridUpdateMode.VALUE_CHANGED,  # Only update on value changes, with improved editing options
                 allow_unsafe_jscode=True,
                 fit_columns_on_grid_load=True,  # Enable auto-fitting columns to content
                 height=600,
@@ -2978,13 +3004,13 @@ class EquipmentManagementApp:
             if 'select_all_select_options_rows' in st.session_state:
                 selected_rows = st.session_state['select_all_select_options_rows']
             
-            # Show notification if selection was automatically updated due to filtering
-            if st.session_state.get('selection_auto_updated', False):
+            # Show notification if selection was automatically updated due to filtering (reduce noise)
+            if st.session_state.get('selection_auto_updated', False) and st.session_state.get('show_selection_messages', True):
                 st.success("🔄 **Selection automatically updated** to match filtered results!")
                 st.session_state['selection_auto_updated'] = False  # Clear the flag
             
-            # Show notification if showing all data due to empty AgGrid filters
-            if st.session_state.get('show_empty_filter_message', False):
+            # Show notification if showing all data due to empty AgGrid filters (reduce noise)  
+            if st.session_state.get('show_empty_filter_message', False) and st.session_state.get('show_selection_messages', True):
                 st.info("📄 **Showing all data** - AgGrid filters resulted in no matches, displaying complete dataset")
                 st.session_state['show_empty_filter_message'] = False  # Clear the flag
             
@@ -2997,6 +3023,243 @@ class EquipmentManagementApp:
             
             # Get edited data from AgGrid
             self.edited_select_options_df = grid_response['data']
+            
+            # Add Save Changes to Database button right after the AgGrid (only for users with edit permissions)
+            if permissions["can_edit"]:
+                if st.button("💾 Save Changes to Database", key="save_changes_btn_select_options"):
+                    import uuid  # Import at the proper scope level
+                    import numpy as np  # Import numpy for type checking
+                    
+                    # Helper function to convert numpy types to Python native types
+                    def convert_to_python_type(value):
+                        """Convert numpy types to Python native types for MongoDB compatibility"""
+                        if pd.isna(value):
+                            return ""  # Convert NaN to empty string for MongoDB
+                        elif hasattr(value, 'item'):  # numpy scalar
+                            return value.item()
+                        elif isinstance(value, np.integer):
+                            return int(value)
+                        elif isinstance(value, np.floating):
+                            return float(value)
+                        elif isinstance(value, np.bool_):
+                            return bool(value)
+                        elif isinstance(value, (pd.Int64Dtype, pd.Float64Dtype)):
+                            return float(value) if pd.notna(value) else ""
+                        else:
+                            return value
+                    
+                    # Prevent accidental deletion if DataFrame is empty
+                    if self.edited_select_options_df is None or self.edited_select_options_df.empty:
+                        st.error("Cannot save: No data to save. The table is empty.")
+                        return
+
+                    # Smart save: Only save actual changes at the cell level
+                    original_data = self.Equipment_select_options_db_df.copy()
+                    edited_data = self.edited_select_options_df.copy()
+                    
+                    if original_data.empty or edited_data.empty:
+                        st.info("No data to compare for changes.")
+                        return
+                    
+                    # Clean up invalid column names that might cause KeyErrors
+                    def clean_column_names(df):
+                        """Remove or rename invalid column names"""
+                        valid_columns = []
+                        for col in df.columns:
+                            # Skip columns with invalid names
+                            if pd.isna(col) or str(col).lower() in ['nan', 'none', ''] or str(col).strip() == '':
+                                continue
+                            valid_columns.append(col)
+                        return df[valid_columns]
+                    
+                    # Apply column cleaning
+                    original_data = clean_column_names(original_data)
+                    edited_data = clean_column_names(edited_data)
+                    
+                    # Ensure both DataFrames have 'index' column for matching
+                    if 'index' not in original_data.columns or 'index' not in edited_data.columns:
+                        st.error("Index column missing - cannot determine which records to update.")
+                        return
+                    
+                    # Convert index columns to string for reliable matching
+                    original_data['index'] = original_data['index'].astype(str)
+                    edited_data['index'] = edited_data['index'].astype(str)
+                    
+                    # Fix missing or duplicate indices - ensure each row has a unique index
+                    import uuid
+                    
+                    # Check for and fix missing indices in original data
+                    missing_indices_orig = original_data['index'].isna() | (original_data['index'] == 'nan') | (original_data['index'] == 'None') | (original_data['index'] == '')
+                    if missing_indices_orig.any():
+                        # Batch update approach - much faster than individual updates
+                        updates_to_make = []
+                        
+                        for idx in original_data[missing_indices_orig].index:
+                            new_uuid = str(uuid.uuid4())
+                            original_data.loc[idx, 'index'] = new_uuid
+                            
+                            # Create update info for batch processing
+                            filter_query = {"index": {"$exists": False}}
+                            # Try to find a more specific filter if possible
+                            row_data = original_data.iloc[idx].to_dict()
+                            for col, val in row_data.items():
+                                if col != 'index' and pd.notna(val):
+                                    filter_query = {col: val}
+                                    break
+                            
+                            updates_to_make.append({
+                                'filter': filter_query,
+                                'new_index': new_uuid
+                            })
+                        
+                        # Execute batch updates
+                        if updates_to_make:
+                            try:
+                                for update_info in updates_to_make:
+                                    filter_query = update_info['filter']
+                                    self.Equipment_select_options.update_one(
+                                        filter_query,
+                                        {"$set": {"index": update_info['new_index']}}
+                                    )
+                            except Exception as e:
+                                st.warning(f"Batch update encountered error: {e}")
+                    
+                    
+                    # Check for and fix missing indices in edited data
+                    missing_indices_edit = edited_data['index'].isna() | (edited_data['index'] == 'nan') | (edited_data['index'] == 'None') | (edited_data['index'] == '')
+                    if missing_indices_edit.any():
+                        for idx in edited_data[missing_indices_edit].index:
+                            # Use the corresponding index from original_data if it was fixed
+                            if idx < len(original_data):
+                                edited_data.loc[idx, 'index'] = original_data.iloc[idx]['index']
+                            else:
+                                # New row, assign new UUID
+                                edited_data.loc[idx, 'index'] = str(uuid.uuid4())
+                    
+                    # Since we have issues with UUID-based matching, let's use row-by-row comparison instead
+                    # This is more reliable for detecting changes in data editor scenarios
+                    
+                    update_count = 0
+                    insert_count = 0
+                    changes_detected = []
+                    
+                    # Compare row by row using pandas index positions
+                    min_rows = min(len(original_data), len(edited_data))
+                    
+                    # First pass: identify which rows actually have changes
+                    rows_with_changes = []
+                    for row_idx in range(min_rows):
+                        original_row = original_data.iloc[row_idx]
+                        edited_row = edited_data.iloc[row_idx]
+                        
+                        # Skip comparison if critical data is missing
+                        if pd.isna(original_row.get('index')) or pd.isna(edited_row.get('index')):
+                            continue
+                            
+                        # Check if any column values have changed
+                        has_changes = False
+                        for col in original_data.columns:
+                            if col in edited_data.columns:
+                                orig_val = original_row[col]
+                                edit_val = edited_row[col]
+                                
+                                # Handle NaN comparisons properly
+                                if pd.isna(orig_val) and pd.isna(edit_val):
+                                    continue  # Both are NaN, no change
+                                elif pd.isna(orig_val) or pd.isna(edit_val):
+                                    has_changes = True  # One is NaN, the other isn't
+                                    break
+                                elif str(orig_val) != str(edit_val):
+                                    has_changes = True
+                                    break
+                        
+                        if has_changes:
+                            rows_with_changes.append(row_idx)
+                    
+                    # Second pass: update only the rows that have changes
+                    for row_idx in rows_with_changes:
+                        try:
+                            original_row = original_data.iloc[row_idx]
+                            edited_row = edited_data.iloc[row_idx]
+                            
+                            # Convert pandas Series to dict and handle data types properly
+                            update_data = {}
+                            for col, value in edited_row.items():
+                                update_data[col] = convert_to_python_type(value)
+                            
+                            # Update the document by its index
+                            filter_query = {"index": str(original_row['index'])}
+                            result = self.Equipment_select_options.update_one(
+                                filter_query,
+                                {"$set": update_data}
+                            )
+                            
+                            if result.modified_count > 0:
+                                update_count += 1
+                                changes_detected.append(f"Row {row_idx + 1}")
+                            
+                        except Exception as e:
+                            st.error(f"Error updating row {row_idx + 1}: {e}")
+                    
+                    # Handle new rows (if edited_data has more rows than original_data)
+                    if len(edited_data) > len(original_data):
+                        for row_idx in range(len(original_data), len(edited_data)):
+                            try:
+                                new_row = edited_data.iloc[row_idx]
+                                
+                                # Convert new row to dict and handle data types
+                                insert_data = {}
+                                for col, value in new_row.items():
+                                    insert_data[col] = convert_to_python_type(value)
+                                
+                                # Ensure new row has a unique index
+                                if not insert_data.get('index'):
+                                    insert_data['index'] = str(uuid.uuid4())
+                                
+                                self.Equipment_select_options.insert_one(insert_data)
+                                insert_count += 1
+                                changes_detected.append(f"New row {row_idx + 1}")
+                                
+                            except Exception as e:
+                                st.error(f"Error inserting new row {row_idx + 1}: {e}")
+                    
+                    # Show results
+                    if update_count > 0 or insert_count > 0:
+                        if update_count > 0 and insert_count > 0:
+                            st.success(f"💾 **Successfully saved!** Updated {update_count} rows and added {insert_count} new rows.")
+                        elif update_count > 0:
+                            st.success(f"💾 **Successfully updated {update_count} rows!**")
+                        else:
+                            st.success(f"💾 **Successfully added {insert_count} new rows!**")
+                        
+                        with st.expander("📝 Show changed rows", expanded=False):
+                            st.write(f"**Modified:** {', '.join(changes_detected)}")
+                        
+                        # Reload the data to reflect changes
+                        with st.spinner('Refreshing data...'):
+                            self.Equipment_select_options_db_records = list(self.Equipment_select_options.find({}, {'_id': 0}))
+                            self.Equipment_select_options_db_df = pd.DataFrame(self.Equipment_select_options_db_records)
+                            
+                            # Ensure ID column exists and is properly formatted
+                            if not self.Equipment_select_options_db_df.empty:
+                                if 'ID' not in self.Equipment_select_options_db_df.columns:
+                                    # Create sequential ID starting from 1, convert to regular Python int
+                                    self.Equipment_select_options_db_df['ID'] = [int(i) for i in range(1, len(self.Equipment_select_options_db_df) + 1)]
+                                    
+                                    # Update MongoDB records to include ID
+                                    for idx, row in self.Equipment_select_options_db_df.iterrows():
+                                        self.Equipment_select_options.update_one(
+                                            {"index": row['index']}, 
+                                            {"$set": {"ID": row['ID']}}
+                                        )
+                            
+                            # Apply column order and prepare display data
+                            self.Equipment_select_options_db_df = self._apply_column_order(self.Equipment_select_options_db_df, 'select_options')
+                            self.display_select_options_df = self._prepare_display_data_select_options()
+                            
+                        st.rerun()
+                    else:
+                        st.info("📋 No changes detected - nothing to save.")
             
             # For non-edit users, show a read-only message and revert any changes
             if not permissions["can_edit"]:
@@ -3100,7 +3363,7 @@ class EquipmentManagementApp:
                                         
                                         # Reassign sequential IDs after deletion to maintain continuity
                                         if not self.Equipment_select_options_db_df.empty:
-                                            self.Equipment_select_options_db_df['ID'] = range(1, len(self.Equipment_select_options_db_df) + 1)
+                                            self.Equipment_select_options_db_df['ID'] = [int(i) for i in range(1, len(self.Equipment_select_options_db_df) + 1)]
                                             # Update IDs in database
                                             for idx, row in self.Equipment_select_options_db_df.iterrows():
                                                 if 'index' in row and pd.notna(row['index']):
@@ -4112,114 +4375,137 @@ class EquipmentManagementApp:
                 self._initialize_select_options_data()
                 st.session_state.select_options_data_loaded = True
 
-            # Tabs for Equipment and Equipment_select_options
+            # Initialize current page in session state if not exists
+            if 'current_page' not in st.session_state:
+                st.session_state.current_page = "Equipment Records"
+
+            # Page navigation using selectbox - only for admin users
             if st.session_state.user_role == "admin":
-                tab1, tab2, tab3, tab4 = st.tabs(["Equipment Records", "Equipment Select Options", "🗂️ Backup & Restore", "👥 User Management"])
+                page_options = ["Equipment Records", "Equipment Select Options", "🗂️ Backup & Restore", "👥 User Management"]
+                
+                # Callback function to handle page changes immediately
+                def on_page_change():
+                    st.session_state.current_page = st.session_state.page_selector
+                
+                # Use selectbox for page selection with immediate callback
+                selected_page = st.selectbox(
+                    "📋 Navigate to:",
+                    options=page_options,
+                    index=page_options.index(st.session_state.current_page) if st.session_state.current_page in page_options else 0,
+                    key="page_selector",
+                    on_change=on_page_change
+                )
+                
+                st.markdown("---")  # Add a separator line
             else:
-                tab1, tab2 = st.tabs(["Equipment Records", "Equipment Select Options"])
-                #nth-child(2) => Equipment Select Options
-                st.markdown("""
-                    <style>
-                    button[data-baseweb="tab"]:nth-child(2) {display: none;}
-                    </style>
-                """, unsafe_allow_html=True)
-                
+                # For non-admin users, use simple tabs for Equipment Records only
+                tab1 = st.tabs(["Equipment Records"])[0]
             
-            with tab1:
-                ##Equipment Records
-                
-                # Check if user needs password change first
-                if self.auth_manager.user_needs_password_change(st.session_state.username):
-                    st.warning("⚠️ You must change your password before accessing the system.")
-                    self.auth_manager.password_change_page()
-                    return
-
-                # Use cached data instead of reloading from database
-                if not hasattr(self, 'df') or self.df is None:
-                    # Fallback reload if cache is missing
-                    self._initialize_equipment_data()
-
-                # Set db_df for compatibility
-                self.db_df = self.df.copy() if hasattr(self, 'df') and not self.df.empty else pd.DataFrame()
-
-                # Use the new Equipment_Filters function
-                self.Equipment_Filters()
-
-            ############################################################### tab2
-            #only admin can see 
-            if st.session_state.user_role == "admin":      
-                
-                with tab2:
-                    st.session_state.current_tab = "Equipment Select Options"
+            # Display the selected page content for admin users
+            if st.session_state.user_role == "admin":
+                if st.session_state.current_page == "Equipment Records":
+                    ##Equipment Records
                     
-                    # Load Equipment Select Options data only when this tab is accessed
-                    if not hasattr(self, 'Equipment_select_options_db_df') or self.Equipment_select_options_db_df is None:
-                        with st.spinner('Loading select options data...'):
-                            self._initialize_select_options_data()
-                    
-                    # Process ID column and indexing only if data exists
-                    if not self.Equipment_select_options_db_df.empty:
-                        # Lazy ID column processing - only do this once per session
-                        if 'select_options_id_processed' not in st.session_state:
-                            with st.spinner('Setting up ID column...'):
-                                self._process_select_options_id_column()
-                            st.session_state.select_options_id_processed = True
-                    
-                    # Sort DataFrame by ID column if it exists and is not empty
-                    if not self.Equipment_select_options_db_df.empty and 'ID' in self.Equipment_select_options_db_df.columns:
-                        try:
-                            # Sort by ID column in ascending order
-                            if pd.api.types.is_numeric_dtype(self.Equipment_select_options_db_df['ID']):
-                                # Pure numeric column - sort numerically
-                                self.Equipment_select_options_db_df = self.Equipment_select_options_db_df.sort_values(
-                                    by='ID', ascending=True, na_position='last'
-                                ).reset_index(drop=True)
-                            else:
-                                # Mixed or string column - try to convert to numeric for sorting
-                                self.Equipment_select_options_db_df = self.Equipment_select_options_db_df.sort_values(
-                                    by='ID', 
-                                    ascending=True, 
-                                    na_position='last', 
-                                    key=lambda x: pd.to_numeric(x, errors='coerce').fillna(float('inf'))
-                                ).reset_index(drop=True)
-                        except Exception as e:
-                            # If sorting fails, continue without sorting
-                            pass
-                    
-                    # Apply admin-saved column order (this will handle positioning of all columns including id and index)
-                    self.Equipment_select_options_db_df = self._apply_column_order(self.Equipment_select_options_db_df, 'select_options')
+                    # Check if user needs password change first
+                    if self.auth_manager.user_needs_password_change(st.session_state.username):
+                        st.warning("⚠️ You must change your password before accessing the system.")
+                        self.auth_manager.password_change_page()
+                        return
 
-                    self.Equipment_select_options_Filters() 
+                    # Use cached data instead of reloading from database
+                    if not hasattr(self, 'df') or self.df is None:
+                        # Fallback reload if cache is missing
+                        self._initialize_equipment_data()
 
-                    # Column and Filter management for Equipment Select Options
-                    self.save_select_options_column_order_ui()
-                    self.save_select_options_filter_order_ui()
-                    self.add_new_column_to_select_options_db()
-                    self.rename_column_in_select_options_db_ui()
-                    self.delete_column_from_select_options_db_ui()
+                    # Set db_df for compatibility
+                    self.db_df = self.df.copy() if hasattr(self, 'df') and not self.df.empty else pd.DataFrame()
+
+                    # Use the new Equipment_Filters function
+                    self.Equipment_Filters()
+                    
+                elif st.session_state.current_page == "Equipment Select Options":
+                    #only admin can see 
+                    if st.session_state.user_role == "admin":      
+                        st.session_state.current_tab = "Equipment Select Options"
+                        
+                        # Load Equipment Select Options data only when this tab is accessed
+                        if not hasattr(self, 'Equipment_select_options_db_df') or self.Equipment_select_options_db_df is None:
+                            with st.spinner('Loading select options data...'):
+                                self._initialize_select_options_data()
+                        
+                        # Process ID column and indexing only if data exists
+                        if not self.Equipment_select_options_db_df.empty:
+                            # Lazy ID column processing - only do this once per session
+                            if 'select_options_id_processed' not in st.session_state:
+                                with st.spinner('Setting up ID column...'):
+                                    self._process_select_options_id_column()
+                                st.session_state.select_options_id_processed = True
+                        
+                        # Sort DataFrame by ID column if it exists and is not empty
+                        if not self.Equipment_select_options_db_df.empty and 'ID' in self.Equipment_select_options_db_df.columns:
+                            try:
+                                # Sort by ID column in ascending order
+                                if pd.api.types.is_numeric_dtype(self.Equipment_select_options_db_df['ID']):
+                                    # Pure numeric column - sort numerically
+                                    self.Equipment_select_options_db_df = self.Equipment_select_options_db_df.sort_values(
+                                        by='ID', ascending=True, na_position='last'
+                                    ).reset_index(drop=True)
+                                else:
+                                    # Mixed or string column - try to convert to numeric for sorting
+                                    self.Equipment_select_options_db_df = self.Equipment_select_options_db_df.sort_values(
+                                        by='ID', 
+                                        ascending=True, 
+                                        na_position='last', 
+                                        key=lambda x: pd.to_numeric(x, errors='coerce').fillna(float('inf'))
+                                    ).reset_index(drop=True)
+                            except Exception as e:
+                                # If sorting fails, continue without sorting
+                                pass
+                        
+                        # Apply admin-saved column order (this will handle positioning of all columns including id and index)
+                        self.Equipment_select_options_db_df = self._apply_column_order(self.Equipment_select_options_db_df, 'select_options')
+
+                        self.Equipment_select_options_Filters() 
+
+                        # Column and Filter management for Equipment Select Options
+                        self.save_select_options_column_order_ui()
+                        self.save_select_options_filter_order_ui()
+                        self.add_new_column_to_select_options_db()
+                        self.rename_column_in_select_options_db_ui()
+                        self.delete_column_from_select_options_db_ui()
+                        
+                        # Web Management section for Equipment Records
+                        st.markdown("### Web Management")
+                        
+                        # Equipment Records Column and Filter Order Management
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            if st.button("💾 Save Equipment Column Order", key="save_eq_column_order_select_options"):
+                                self.save_equipment_column_order_ui()
+                        
+                        with col2:
+                            if st.button("🔧 Save Equipment Filter Order", key="save_eq_filter_order_select_options"):
+                                self.save_equipment_filter_order_ui()
 
                     # st.dataframe(
                     #     self.Equipment_select_options_db_df,
                     #     use_container_width=True
                     # )
-                    # Only show Save button for users with edit permissions
-                    permissions = self.auth_manager.get_user_permissions()
-                    if permissions.get("can_edit", False):
-                        if st.button("💾 Save Changes to Database", key="save_changes_btn_select_options"):
-                            import uuid  # Import at the proper scope level
-                            
-                            # Prevent accidental deletion if DataFrame is empty
-                            if self.edited_select_options_df is None or self.edited_select_options_df.empty:
-                                st.error("Cannot save: No data to save. The table is empty.")
-                                return
-
-                            # Smart save: Only save actual changes at the cell level
-                            original_data = self.Equipment_select_options_db_df.copy()
-                            edited_data = self.edited_select_options_df.copy()
-                            
-                            if original_data.empty or edited_data.empty:
-                                st.info("No data to compare for changes.")
-                                return
+                    
+                elif st.session_state.current_page == "🗂️ Backup & Restore":
+                    # Backup and Restore page (only for admin users)
+                    if st.session_state.user_role == "admin":
+                        st.session_state.current_tab = "Backup & Restore"
+                        
+                        # Show backup notifications if any
+                        if st.session_state.get("backup_notification"):
+                            st.success(st.session_state["backup_notification"])
+                            del st.session_state["backup_notification"]
+                        
+                        if st.session_state.get("backup_error"):
+                            st.error(st.session_state["backup_error"])
+                            del st.session_state["backup_error"]
                             
                             # Clean up invalid column names that might cause KeyErrors
                             def clean_column_names(df):
@@ -4445,7 +4731,7 @@ class EquipmentManagementApp:
                                 
                                 # Ensure ID column exists and has proper sequential values
                                 if 'ID' not in self.Equipment_select_options_db_df.columns:
-                                    self.Equipment_select_options_db_df['ID'] = range(1, len(self.Equipment_select_options_db_df) + 1)
+                                    self.Equipment_select_options_db_df['ID'] = [int(i) for i in range(1, len(self.Equipment_select_options_db_df) + 1)]
                                 
                                 # Sort by ID after reload
                                 if not self.Equipment_select_options_db_df.empty and 'ID' in self.Equipment_select_options_db_df.columns:
@@ -4463,41 +4749,70 @@ class EquipmentManagementApp:
                     # ...existing code...
                     #######################################################
 
-            # Backup and Restore tab (only for admin users)
-            if st.session_state.user_role == "admin":
-                with tab3:
-                    st.session_state.current_tab = "Backup & Restore"
-                    
-                    # Show backup notifications if any
-                    if st.session_state.get("backup_notification"):
-                        st.success(st.session_state["backup_notification"])
-                        del st.session_state["backup_notification"]
-                    
-                    if st.session_state.get("backup_error"):
-                        st.error(st.session_state["backup_error"])
-                        del st.session_state["backup_error"]
-                    
-                    # Integrate automatic backup check
-                    if integrate_auto_backup_into_main_app:
-                        integrate_auto_backup_into_main_app(self, backup_interval_hours=1)
-                    
-                    # Display backup and restore UI
-                    if backup_restore_ui:
-                        backup_restore_ui(self)
-                    else:
-                        st.error("❌ Backup system not available. Please ensure backup_csv_for_db_restore.py is accessible.")
-                
-                # User Management tab (only for admin users)
-                with tab4:
-                    st.session_state.current_tab = "User Management"
+                elif st.session_state.current_page == "🗂️ Backup & Restore":
+                    # Backup and Restore page (only for admin users)
+                    if st.session_state.user_role == "admin":
+                        st.session_state.current_tab = "Backup & Restore"
+                        
+                        # Show backup notifications if any
+                        if st.session_state.get("backup_notification"):
+                            st.success(st.session_state["backup_notification"])
+                            del st.session_state["backup_notification"]
+                        
+                        if st.session_state.get("backup_error"):
+                            st.error(st.session_state["backup_error"])
+                            del st.session_state["backup_error"]
+                        
+                        # Import and use the backup system
+                        try:
+                            from backup_csv_for_db_restore import backup_restore_ui, integrate_auto_backup_into_main_app
+                        except ImportError:
+                            backup_restore_ui = None
+                            integrate_auto_backup_into_main_app = None
+                        
+                        # Integrate automatic backup check
+                        if integrate_auto_backup_into_main_app:
+                            integrate_auto_backup_into_main_app(self, backup_interval_hours=1)
+                        
+                        # Display backup and restore UI
+                        if backup_restore_ui:
+                            backup_restore_ui(self)
+                        else:
+                            st.error("❌ Backup system not available. Please ensure backup_csv_for_db_restore.py is accessible.")
+                        
+                elif st.session_state.current_page == "👥 User Management":
+                    # User Management page (only for admin users)
+                    if st.session_state.user_role == "admin":
+                        st.session_state.current_tab = "User Management"
+                        
+                        # Check if user needs password change first
+                        if self.auth_manager.user_needs_password_change(st.session_state.username):
+                            st.warning("⚠️ Please change your password before accessing other features.")
+                            self.auth_manager.password_change_page()
+                        else:
+                            # Show user management interface
+                            self.auth_manager.user_management_page()
+            else:
+                # For non-admin users, use tabs for Equipment Records and Equipment Select Options
+                with tab1:
+                    ##Equipment Records
                     
                     # Check if user needs password change first
                     if self.auth_manager.user_needs_password_change(st.session_state.username):
-                        st.warning("⚠️ Please change your password before accessing other features.")
+                        st.warning("⚠️ You must change your password before accessing the system.")
                         self.auth_manager.password_change_page()
-                    else:
-                        # Show user management interface
-                        self.auth_manager.user_management_page()
+                        return
+
+                    # Use cached data instead of reloading from database
+                    if not hasattr(self, 'df') or self.df is None:
+                        # Fallback reload if cache is missing
+                        self._initialize_equipment_data()
+
+                    # Set db_df for compatibility
+                    self.db_df = self.df.copy() if hasattr(self, 'df') and not self.df.empty else pd.DataFrame()
+
+                    # Use the new Equipment_Filters function
+                    self.Equipment_Filters()
 
 
 
