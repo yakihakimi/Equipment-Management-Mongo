@@ -2221,6 +2221,20 @@ class EquipmentManagementApp:
             st.error(f"Error saving select options filter order: {str(e)}")
             return False
 
+    def download_select_options_ui(self):
+        """UI for downloading Equipment Select Options as CSV"""
+        if hasattr(self, 'Equipment_select_options_db_df') and not self.Equipment_select_options_db_df.empty:
+            select_options_csv = self.Equipment_select_options_db_df.to_csv(index=False)
+            st.download_button(
+                label="📥 Download Equipment Select Options",
+                data=select_options_csv,
+                file_name="equipment_select_options.csv",
+                mime="text/csv",
+                key="download_select_options_all"
+            )
+        else:
+            st.info("No Equipment Select Options data available for download")
+
     def _load_filter_order(self, default_filters):
         """
         Load saved filter order preference.
@@ -4484,6 +4498,12 @@ class EquipmentManagementApp:
                         self.add_new_column_to_select_options_db()
                         self.rename_column_in_select_options_db_ui()
                         self.delete_column_from_select_options_db_ui()
+                        
+                        # Admin Downloads section
+                        st.markdown("### Admin Downloads")
+                        
+                        # Download Equipment Select Options button
+                        self.download_select_options_ui()
                         
                         # Web Management section for Equipment Records
                         st.markdown("### Web Management")
