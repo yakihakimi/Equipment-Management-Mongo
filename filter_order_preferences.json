@@ -3,6 +3,7 @@
     "Category",
     "Vendor",
     "Model",
+    "Location",
     "Serial",
     "Description",
     "ETAG",
@@ -11,7 +12,8 @@
     "IP Address",
     "Purchase Value",
     "Year of Purchase",
-    "Location"
+    "Comments",
+    "Modules"
   ],
   "select_options_filters": [
     "Location",

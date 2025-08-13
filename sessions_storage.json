@@ -46,5 +46,11 @@
     "role": "admin",
     "timestamp": "2025-08-12T09:37:07.290843",
     "session_token": "fe15b745-fa8a-4155-a635-dbfe4d3f6e4a"
+  },
+  "9c7d069c-81be-4161-8f96-82985ba381f4": {
+    "username": "admin",
+    "role": "admin",
+    "timestamp": "2025-08-13T13:45:47.736995",
+    "session_token": "9c7d069c-81be-4161-8f96-82985ba381f4"
   }
 }

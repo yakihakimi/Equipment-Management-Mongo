@@ -1,0 +1,8 @@
+{
+  "timestamp": "2025-08-10T09:23:15.298130",
+  "from": "yakov.yosef.hakimi@altera.com",
+  "to": "yakov.yosef.hakimi@altera.com",
+  "subject": "Test - Updated Email Configuration",
+  "body": "\nThis is a test to verify the updated email configuration.\n\nUpdated Settings:\n- From Email: yakov.yosef.hakimi@altera.com\n- To Email: yakov.yosef.hakimi@altera.com\n- System: Altera Lab Equipment Management System\n- Test Time: 2025-08-10 09:23:15\n\nThe FROM field should now show your email address instead of the equipment-system@altera.com address.\n    ",
+  "status": "saved_to_file"
+}

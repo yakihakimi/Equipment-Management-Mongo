@@ -1,0 +1,8 @@
+{
+  "timestamp": "2025-08-10T10:11:45.910122",
+  "from": "yakov.yosef.hakimi@intel.com",
+  "to": "yakov.yosef.hakimi@altera.com",
+  "subject": "New User Access Request - yaki",
+  "body": "\n        A new user has requested access to the Altera Lab Equipment Management System:\n        \n        Name: yaki hakimi\n        Username: yaki\n        Email: yakov.yosef.hakimi@altera.com\n        WWID: 11897458\n        Requested Role: tech\n        Request Date: 2025-08-10 10:11:44\n        \n        Please log into the Altera Lab Equipment Management System to approve or reject this request.\n        \n        System URL: http://localhost:8501\n        \n        This is an automated message from the Altera Lab Equipment Management System.\n        ",
+  "status": "saved_to_file"
+}

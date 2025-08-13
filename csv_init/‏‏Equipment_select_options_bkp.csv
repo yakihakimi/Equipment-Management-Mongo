@@ -1,0 +1,56 @@
+﻿Category,Location,Vendor,index
+SCOPE,Haifa,Thermotron,0
+FUNCTION/SIGNAL,bench 7,KITHLEY,1
+DMM,Scondery Lab,synthesis reaserch,2
+Board,bench 23,FLUKE,3
+THERMAL TOOL,bench 11,EXTREM NETWORKS,4
+Other,Storeroom,TTI,5
+SOURCE METER,bench 18,ROHDE&SCHWARZ,6
+SOURCE METER,bench 18,ROHDE&SCHWARZ,7
+Logic Analysis,Lab storage,HP/AGILENT,8
+Logic analysis module,Retired,HOLZWORTH,9
+ANALYZER,bench 17,OTHER,10
+Cabels,bench 28,Anritsu,11
+SOLDER,bench 2,METCAL,12
+Clock Gen,bench 3,nan,13
+PROBE,bench 20,WILDER TECHNOLOGIES,14
+POWER SUPPLY,bench 25,STANFORD RESEARCH SYSTEMS,15
+,bench 12,KEYSIGHT,16
+,bench 22,Synopsys,17
+,bench 1,Intel,18
+,bench 5,GIGATRONICS,19
+,bench 26,WAVECREST,20
+,bench 10,MECHANICAL DEVICES,21
+,nan,HP/AGILENT/KEYSIGHT,22
+,Lidor,IXIA,23
+,bench 6,Noisecom,24
+,Daniel,Agilent,25
+,bench 30,ARTEK,26
+,bench 15,TEKTRONIX,27
+,bench 8,,28
+,bench 14,,29
+,bench 13,,30
+,bench 4,,31
+,in repair,,32
+,bench 27,,33
+,bench 29,,34
+,bench 19,,35
+,bench 12,KEYSIGHT,36
+,bench 22,Synopsys,37
+,bench 1,Intel,38
+,bench 5,GIGATRONICS,39
+,bench 26,WAVECREST,40
+,bench 10,MECHANICAL DEVICES,41
+,nan,HP/AGILENT/KEYSIGHT,42
+,Lidor,IXIA,43
+,bench 6,Noisecom,44
+,Daniel,Agilent,45
+,bench 30,ARTEK,46
+,bench 15,TEKTRONIX,47
+,bench 8,,48
+,bench 14,,49
+,bench 13,,50
+,bench 4,,51
+,in repair,,52
+,bench 27,,53
+,bench 29,,54

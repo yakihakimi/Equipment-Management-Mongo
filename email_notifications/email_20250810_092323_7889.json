@@ -1,0 +1,8 @@
+{
+  "timestamp": "2025-08-10T09:23:23.832091",
+  "from": "equipment-system@altera.com",
+  "to": "yakov.yosef.hakimi@altera.com",
+  "subject": "New User Access Request - testuser",
+  "body": "\n        A new user has requested access to the Altera Lab Equipment Management System:\n        \n        Name: Test User\n        Username: testuser\n        Email: testuser@altera.com\n        WWID: TEST001\n        Requested Role: user\n        Request Date: 2025-08-10 15:30:00\n        \n        Please log into the system to approve or reject this request.\n        \n        This is an automated message from the Equipment Management System.\n        ",
+  "status": "saved_to_file"
+}

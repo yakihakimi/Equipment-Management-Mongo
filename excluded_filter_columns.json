@@ -1,0 +1,7 @@
+{
+  "excluded_columns": [
+    "ID",
+    "check",
+    "uuid"
+  ]
+}

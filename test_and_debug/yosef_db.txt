@@ -1,0 +1,1376 @@
+import streamlit as st
+from pymongo import MongoClient
+from pymongo.errors import ConnectionFailure, OperationFailure
+import base64
+import pandas as pd
+from pathlib import Path
+import bcrypt
+from bson import ObjectId
+from datetime import datetime, timedelta
+import uuid
+from streamlit_cookies_controller import CookieController
+import time
+import smtplib
+from email.mime.text import MIMEText
+import re
+
+# --- Set Page Config ---
+st.set_page_config(layout="wide", initial_sidebar_state="collapsed")
+
+url =  "http://10.220.38.27:8501"
+
+# Column display names for DataFrame
+COLUMN_DISPLAY_NAMES = {
+    "test_name": "Test Name",
+    "test_owner": "Owner",
+    "chips_num": "Chips",
+    "Run_EST": "Run EST (Min)",
+    "test_flow": "Test Flow",
+    "Fw_Expected_Version_List": "Firmware Version",
+    "Break_point_List": "Break Points",
+    "Skip_Calib_List": "Skip Calibration",
+    "Final_State": "Final State",
+    "Run_Init": "Run Init",
+    "RunInit_Type": "RunInit Type",
+    "Itr_Init": "Itr Init",
+    "ItrInit_Type": "ItrInit Type",
+    "Equipment": "Equipment",
+    "Test_params": "Test Params",
+    "Corners": "Corners",
+    "Lane_List": "Lane List",
+    "description": "Description",
+    "comments": "Comments",
+    "Priority": "Priority",
+    "created_at": "Created At",
+    "status": "Status",
+    "hidden_id": "ID",
+    "Select": "Select",
+    "username": "Username",
+    "email": "Email",
+    "request_timestamp": "Request Timestamp"
+}
+
+# --- MongoDB Setup ---
+try:
+    client = MongoClient("mongodb://ascy00075.sc.altera.com:27017/mongo?readPreference=primary&ssl=false")
+    client.admin.command("ping")
+except ConnectionFailure as e:
+    st.error(f"MongoDB connection failed: {e}")
+    st.stop()
+
+db = client["inventory_db"]
+users_col = db["users"]
+sessions_col = db["sessions"]
+collection = db["MiniMax"]
+access_requests_col = db["access_requests"]
+dropdown_col = db["dropdown_values"]
+
+
+def load_dynamic_options(field):
+    doc = dropdown_col.find_one({"field": field})
+    return doc["values"] if doc else []
+
+
+def save_new_option(field, new_value):
+    dropdown_col.update_one(
+        {"field": field},
+        {"$addToSet": {"values": new_value}},
+        upsert=True
+    )
+
+
+# --- Initialize CookieController ---
+cookie_manager = CookieController()
+
+# --- CSS for Entire App ---
+st.markdown("""
+    <style>
+    /* Base button style */
+    .stButton>button {
+        background-color: #87CEEB;
+        color: white;
+        border: none;
+        padding: 0.5rem 1rem;
+        border-radius: 4px;
+        cursor: pointer;
+        width: 100%;
+        transition: background-color 0.3s, color 0.3s;
+    }
+    .stButton>button:hover {
+        background-color: #6BB9D6;
+        color: #000000 !important; /* Black text on hover */
+    }
+
+    /* Override for specific buttons */
+    .approve-btn,
+    .add-filter-btn {
+        background-color: #4CAF50 !important;
+    }
+    .approve-btn:hover,
+    .add-filter-btn:hover {
+        background-color: #45a049 !important;
+        color: white !important; /* Keep text white on hover for these buttons */
+    }
+    .deny-btn,
+    .clear-filter-btn {
+        background-color: #f44336 !important;
+    }
+    .deny-btn:hover,
+    .clear-filter-btn:hover {
+        background-color: #d32f2f !important;
+        color: white !important; /* Keep text white on hover for these buttons */
+    }
+
+    /* General Layout */
+    .logo-container {
+        text-align: center;
+        margin-bottom: 20px;
+    }
+    .logo-container img {
+        max-width: 200px;
+    }
+    .logo-text {
+        color: #005BAC;
+        font-size: 1.5rem;
+        font-weight: bold;
+        margin-top: 5px;
+    }
+
+    /* Style for the centered form column */
+    .centered-form-column {
+        display: flex;
+        justify-content: center;
+    }
+    .centered-form-column .stForm {
+        width: 100%;
+        max-width: 360px;
+        background-color: rgba(240,240,240,0.05);
+        padding: 1.5rem;
+        border: 1px solid rgba(200,200,200,0.2);
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    /* Ensure inputs are compact */
+    .centered-form-column .stForm .stTextInput input {
+        width: 100%;
+        padding: 0.5rem;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+    }
+
+    .stTabs [data-baseweb="tab-list"] {
+        justify-content: center;
+        background-color: #005BAC;
+        border-radius: 10px 10px 0 0;
+        padding: 0;
+    }
+    .stTabs [data-baseweb="tab"] {
+        color: #FFFFFF;
+        padding: 10px 20px;
+        background-color: #005BAC;
+        border: none;
+    }
+    .stTabs [data-baseweb="tab"]:hover {
+        background-color: #003D7A;
+    }
+    .stTabs [data-baseweb="tab--active"] {
+        background-color: #4CAF50;
+        color: #FFFFFF;
+        font-weight: bold;
+    }
+    .stTextInput input {
+        width: 100%;
+        padding: 0.5rem;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        box-sizing: border-box;
+    }
+
+    /* Filter Styles */
+    .filter-container {
+        display: flex;
+        gap: 20px;
+        margin-bottom: 10px;
+    }
+    .filter-select {
+        width: 150px !important;
+        min-width: 150px !important;
+    }
+    .filter-input {
+        width: 150px !important;
+        min-width: 150px !important;
+    }
+
+    /* Access Requests Table */
+    button[kind="secondary"] {
+        padding: 0.2rem 0.5rem !important;
+        font-size: 0.8rem !important;
+    }
+    hr {
+        border: none;
+        border-top: 1px solid black;
+        margin: 4px 0;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+
+# --- Session Management ---
+def generate_session_token():
+    return str(uuid.uuid4())
+
+
+def set_cookie(cookie_name, value):
+    try:
+        expires = datetime.now() + timedelta(minutes=480)
+        cookie_manager.set(cookie_name, value, path="/", same_site="Lax", expires=expires)
+        time.sleep(0.1)
+        verify_cookie = cookie_manager.get(cookie_name)
+        if verify_cookie == value:
+            return True
+        return False
+    except Exception as e:
+        st.error(f"Cookie set error: {e}")
+        return False
+
+
+def load_session():
+    try:
+        session_token = cookie_manager.get("session_token")
+        if session_token:
+            session = sessions_col.find_one({"session_token": session_token})
+            if session and (datetime.now() - session["timestamp"] <= timedelta(minutes=480)):
+                st.session_state["user"] = session["username"]
+                st.session_state["role"] = session["role"]
+                return True
+            else:
+                cookie_manager.remove("session_token")
+                sessions_col.delete_one({"session_token": session_token})
+                sessions_col.delete_many({"timestamp": {"$lt": datetime.now() - timedelta(minutes=480)}})
+        return False
+    except Exception as e:
+        st.error(f"Session load error: {e}")
+        return False
+
+
+# Load session on page load
+load_session()
+
+# --- Main Page Layout ---
+# Show sidebar content only after login
+if "show_sidebar" not in st.session_state:
+    st.session_state["show_sidebar"] = False
+
+if "user" in st.session_state:
+    with st.sidebar:
+        logo_path = Path("Altera_logo.png")
+        if logo_path.exists():
+            logo_base64 = base64.b64encode(open(logo_path, "rb").read()).decode()
+            st.markdown(f"""
+                      <div style="text-align:center; margin-bottom: 10px;">
+                          <img src="data:image/png;base64,{logo_base64}" width="150" />
+                      </div>
+                  """, unsafe_allow_html=True)
+        st.markdown(f"🔐 Logged in as: `{st.session_state['user']}`")
+        col_logout, col_change_pw = st.columns([1, 1])
+        with col_logout:
+            if st.button("🚪 Logout", key="logout_button"):
+                session_token = cookie_manager.get("session_token")
+                if session_token:
+                    sessions_col.delete_one({"session_token": session_token})
+                    cookie_manager.remove("session_token")
+                st.session_state.clear()
+                st.rerun()
+        with col_change_pw:
+            if st.button("Change Pass🔑", key="change_password_button"):
+                st.session_state["show_change_password"] = True
+
+        if st.session_state.get("show_change_password", False):
+            with st.form(key="change_password_form"):
+                st.markdown("### 🔑 Change Your Password")
+                new_password = st.text_input("New Password", type="password", key="new_password")
+                submit = st.form_submit_button("Update Password")
+                if submit:
+                    if not new_password:
+                        st.error("Please enter a new password.")
+                    else:
+                        hashed_pw = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt())
+                        users_col.update_one(
+                            {"username": st.session_state["user"]},
+                            {"$set": {"password": hashed_pw}}
+                        )
+                        st.success(f"✅ Password updated for '{st.session_state['user']}'.")
+                        st.session_state["show_change_password"] = False
+                        session_token = cookie_manager.get("session_token")
+                        if session_token:
+                            sessions_col.delete_one({"session_token": session_token})
+                            cookie_manager.remove("session_token")
+                        st.session_state.clear()
+                        st.rerun()
+
+# Main content: Show login/access request if not logged in, otherwise proceed to app
+if "user" not in st.session_state:
+    # Logo and branding
+    if Path("Altera_logo.png").exists():
+        logo_base64 = base64.b64encode(open("Altera_logo.png", "rb").read()).decode()
+        st.markdown(f"""
+            <div class="logo-container">
+                <img src="data:image/png;base64,{logo_base64}" alt="Altera Logo">
+                <div class="logo-text">AMS - MiniMax</div>
+            </div>
+        """, unsafe_allow_html=True)
+
+    # Tabs for Login and Request Access
+    tab_login, tab_request = st.tabs(["🔐 Login", "📩 Request Access"])
+
+    with tab_login:  # Login Tab
+        # Use columns to center the form
+        _, center_col, _ = st.columns([1, 2, 1])  # Adjust ratios to control width
+        with center_col:
+            with st.form(key="main_login_form"):
+                st.markdown("### 🔐 Login")
+                username = st.text_input(label="", placeholder="Username")
+                password = st.text_input(label="", placeholder="Password", type="password")
+                submit = st.form_submit_button("Login")
+
+                if submit:
+                    try:
+                        user = users_col.find_one({"username": username.strip().lower()})
+                        if user and bcrypt.checkpw(password.encode(), user["password"]):
+                            session_token = generate_session_token()
+                            st.session_state["user"] = user["username"]
+                            st.session_state["role"] = user.get("role", "user")
+                            sessions_col.delete_many({"username": user["username"]})
+                            sessions_col.insert_one({
+                                "session_token": session_token,
+                                "username": user["username"],
+                                "role": user.get("role", "user"),
+                                "timestamp": datetime.now()
+                            })
+                            if set_cookie("session_token", session_token):
+                                st.success("Login successful.")
+                                time.sleep(0.2)
+                                st.session_state["current_tab"] = "All Requests"
+                                st.rerun()
+                            else:
+                                st.error("Failed to set session cookie.")
+                        else:
+                            st.error("Invalid username or password")
+                    except OperationFailure as e:
+                        st.error(f"MongoDB error: {e}")
+
+    with tab_request:  # Request Access Tab
+        # Use columns to center the form
+        _, center_col, _ = st.columns([1, 2, 1])  # Adjust ratios to control width
+        with center_col:
+            with st.form(key="main_access_request_form"):
+                st.write("### 📩 To request access to the MiniMax app, please provide your username and email.")
+
+                # Initialize session state for form fields
+                if "access_username_value" not in st.session_state:
+                    st.session_state["access_username_value"] = ""
+                if "access_email_value" not in st.session_state:
+                    st.session_state["access_email_value"] = ""
+
+                # Clear fields on rerun if triggered
+                if st.session_state.get("clear_access_fields"):
+                    st.session_state["main_access_username_value"] = ""
+                    st.session_state["main_access_email_value"] = ""
+                    st.session_state["clear_access_fields"] = False
+
+                col_user, _ = st.columns([1.2, 1.0])
+                with col_user:
+                    st.text_input("Username", placeholder="Enter username", key="main_access_username_value")
+                    access_username = st.session_state["main_access_username_value"]
+
+                col_email_input, col_email_domain, _ = st.columns([1.25, 0.4, 0.55])
+                with col_email_input:
+                    st.text_input("Email", placeholder="Your name", key="main_access_email_value")
+                with col_email_domain:
+                    st.markdown("<div style='padding-top: 2rem;'>@altera.com</div>", unsafe_allow_html=True)
+
+                access_submit = st.form_submit_button("Submit Request")
+
+                if access_submit:
+                    email_prefix = st.session_state["main_access_email_value"]
+                    full_email = f"{email_prefix.strip().lower()}@altera.com"
+
+                    if not access_username or not email_prefix:
+                        st.error("Please provide both username and email.")
+                    elif not re.match(r'^[a-zA-Z0-9._-]+$', email_prefix):
+                        st.error("Email prefix can only contain letters, numbers, '.', '-', or '_'")
+                    elif users_col.find_one({"username": access_username.strip().lower()}):
+                        st.error("Username already exists.")
+                    elif access_requests_col.find_one({"username": access_username.strip().lower()}):
+                        st.error("Access request already submitted for this username.")
+                    elif users_col.find_one({"email": full_email}):
+                        st.error("Email already associated with an existing user.")
+                    elif access_requests_col.find_one({"email": full_email}):
+                        st.error("Email already used in a pending access request.")
+                    else:
+                        access_requests_col.insert_one({
+                            "username": access_username.strip().lower(),
+                            "email": full_email,
+                            "url:": url,
+                            "request_timestamp": datetime.now()
+                        })
+                        try:
+                            smtp_server = "sc-out.intel.com"
+                            smtp_port = 25
+                            sender_email = "yosef.tal@intel.com"
+                            admin_email = "yosef.tal@altera.com"
+                            subject = "🔐 New MiniMax Access Request"
+                            body = (
+                                f"New access request submitted:\n\n"
+                                f"Username: {access_username.strip().lower()}\n"
+                                f"Email: {full_email}\n"
+                                f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+                                f"This is an automated message."
+                            )
+                            msg = MIMEText(body, _subtype="plain", _charset="utf-8")
+                            msg["Subject"] = subject
+                            msg["From"] = sender_email
+                            msg["To"] = admin_email
+
+                            with smtplib.SMTP(smtp_server, smtp_port) as server:
+                                server.send_message(msg)
+                        except Exception as e:
+                            st.warning(f"⚠️ Failed to notify admin: {e}")
+
+                        st.session_state["clear_access_fields"] = True
+                        st.success("✅ Access request submitted successfully!")
+                        time.sleep(0.3)
+                        st.rerun()
+
+else:
+    # --- Add to session_state to track the tab click ---
+    if 'all_requests_tab_clicked' not in st.session_state:
+        st.session_state['all_requests_tab_clicked'] = False
+
+    # --- MAIN APP ---
+    # Handle rerun trigger from a callback (like deny/approve)
+    if "current_tab" not in st.session_state:
+        st.session_state["current_tab"] = "All Requests"
+
+    # Handle post-action rerun target tab (before rendering tabs)
+    if st.session_state.get("rerun_tab_after_action"):
+        st.session_state["current_tab"] = st.session_state["rerun_tab_after_action"]
+        st.session_state["rerun_tab_after_action"] = None
+        st.rerun()
+
+    # Dynamically build tabs, including "Add Request" as a functional tab
+    main_tabs = ["📋 All Requests", "✏️ Edit Your Requests", "➕ Add Request"]
+    if st.session_state.get("role") == "admin":
+        main_tabs.extend(["👤 Manage Users", "📩 Access Requests"])
+    tab_objects = st.tabs(main_tabs)
+
+    # Dynamically set the active tab based on session state
+    tab_names = [tab.replace("➕ ", "").replace("✏️ ", "").replace("📋 ", "").replace("👤 ", "").replace("📩 ", "") for tab
+                 in main_tabs]
+    current_tab_index = tab_names.index(st.session_state["current_tab"]) if st.session_state[
+                                                                                "current_tab"] in tab_names else 0
+    st.session_state["current_tab"] = tab_names[current_tab_index]
+
+    # --- Detect if All Requests tab is revisited ---
+    if st.session_state["current_tab"] == "All Requests" and not st.session_state['all_requests_tab_clicked']:
+        st.session_state['all_requests_tab_clicked'] = True
+        st.rerun()
+
+    # --- SIDEBAR: Logo + Add Request ---
+    with st.sidebar:
+        logo_path = Path("Altera_logo.png")
+        if logo_path.exists():
+            logo_base64 = base64.b64encode(open(logo_path, "rb").read()).decode()
+            st.markdown(f"""
+                <div style="text-align:center; margin-bottom: 10px;">
+                    <img src="data:image/png;base64,{logo_base64}" width="150" />
+                </div>
+            """, unsafe_allow_html=True)
+
+        # st.markdown("### ➕ Add Request")
+        # test_owner = st.text_input("Test owner", value=st.session_state["user"], key="sidebar_test_owner")
+        # test_name = st.text_input("Test name", key="sidebar_test_name")
+        # test_time = st.number_input("Test time", value=0.0, step=1.0, key="sidebar_test_time")
+        # chips_num = st.number_input("Number of chips", value=0, step=1, key="sidebar_chips_num")
+        # Run_EST = int(test_time) * int(chips_num)
+        # test_flow = st.text_input("Test flow", key="sidebar_test_flow")
+        # fw_expected_version_list = st.text_area("Firmware Expected Version List",
+        #                                         key="sidebar_fw_expected_version_list")
+        # break_point_list = st.text_area("Break point List", key="sidebar_break_point_list")
+        # skip_calib_list = st.text_area("Skip Calib List", key="sidebar_skip_calib_list")
+        # final_state = st.text_input("Final State", key="sidebar_final_state")
+        # run_init = st.text_input("Run Init", key="sidebar_run_init")
+        # runinit_type = st.text_input("RunInit Type", key="sidebar_runinit_type")
+        # itr_init = st.text_input("Itr Init", key="sidebar_itr_init")
+        # itrinit_type = st.text_input("ItrInit Type", key="sidebar_itrinit_type")
+        # equipment = st.text_area("Equipment", key="sidebar_equipment")
+        # test_params = st.text_area("Test params", key="sidebar_test_params")
+        # corners = st.text_area("Corners", key="sidebar_corners")
+        # lane_list = st.text_area("Lane List", key="sidebar_lane_list")
+        # comments = st.text_area("Comments", key="sidebar_comments")
+        # description = st.text_area("Description", key="sidebar_description")
+        # if st.button("Add Request", key="sidebar_add_request_button"):
+        #     collection.insert_one({
+        #         "test_name": test_name,
+        #         "test_owner": test_owner,
+        #         "test_time": test_time,
+        #         "chips_num": chips_num,
+        #         "Run_EST": Run_EST,
+        #         "test_flow": test_flow,
+        #         "Fw_Expected_Version_List": fw_expected_version_list,
+        #         "Break_point_List": break_point_list,
+        #         "Skip_Calib_List": skip_calib_list,
+        #         "Final_State": final_state,
+        #         "Run_Init": run_init,
+        #         "RunInit_Type": runinit_type,
+        #         "Itr_Init": itr_init,
+        #         "ItrInit_Type": itrinit_type,
+        #         "Equipment": equipment,
+        #         "Test_params": test_params,
+        #         "Corners": corners,
+        #         "Lane_List": lane_list,
+        #         "description": description,
+        #         "comments": comments,
+        #         "created_at": datetime.now(),
+        #         "Priority": 99,
+        #         "status": "Hold",
+        #         "status_updated_at": datetime.now()
+        #     })
+        #     st.success("✅ Request added successfully!")
+        #     st.rerun()
+
+    # --- TAB 1: All Requests ---
+    with tab_objects[0]:
+        st.header("📋 MiniMax Requests")
+        items = list(collection.find())
+
+        if st.session_state['all_requests_tab_clicked']:
+            items = list(collection.find())
+            for item in items:
+                item["_id"] = str(item["_id"])
+
+        df = pd.DataFrame(items)
+
+        if df.empty:
+            st.info("No requests found.")
+        else:
+            if 'status' not in df.columns:
+                df['status'] = 'Hold'
+
+            active_df = df[df['status'].isin(['Hold', 'In Progress'])].copy()
+            completed_df = df[df['status'] == 'Done'].copy()
+
+            if not active_df.empty:
+                active_df = active_df.drop(columns=["_id", "test_time"], errors="ignore")
+                active_df = active_df.sort_values(["Priority", "created_at"], ascending=[True, True])
+                active_df.reset_index(drop=True, inplace=True)
+                active_df.index = active_df.index + 1
+                active_df.index.name = ""
+                if st.session_state["role"] != "admin":
+                    active_df = active_df.drop(columns=["Priority", "created_at"], errors="ignore")
+                active_df = active_df.rename(
+                    columns={k: v for k, v in COLUMN_DISPLAY_NAMES.items() if k in active_df.columns})
+
+                st.subheader("Active Requests")
+                filtered_active_df = active_df.copy()
+                with st.expander("Filter Options", expanded=False):
+                    if 'active_filter_count' not in st.session_state:
+                        st.session_state['active_filter_count'] = 1
+                    if 'active_reset_count' not in st.session_state:
+                        st.session_state['active_reset_count'] = 0
+
+                    for i in range(st.session_state['active_filter_count']):
+                        col1, col2 = st.columns([1, 1])
+                        with col1:
+                            filter_column = st.selectbox(
+                                "Filter by",
+                                options=[""] + list(active_df.columns),
+                                key=f"active_filter_column_{i}_{st.session_state['active_reset_count']}",
+                                index=0,
+                                label_visibility="collapsed"
+                            )
+                        with col2:
+                            filter_value = st.text_input(
+                                "Value",
+                                key=f"active_filter_value_{i}_{st.session_state['active_reset_count']}",
+                                value="",
+                                label_visibility="collapsed"
+                            )
+
+                        if filter_column and filter_value:
+                            filtered_active_df = filtered_active_df[
+                                filtered_active_df[filter_column].astype(str).str.contains(filter_value, case=False,
+                                                                                           na=False)
+                            ]
+
+                    col_add, col_clear = st.columns([1, 1])
+                    with col_add:
+                        if st.button("Add Filter", key="add_active_filter", help="Add another filter"):
+                            st.session_state['active_filter_count'] += 1
+                            st.rerun()
+                    with col_clear:
+                        if st.button("Clear Filters", key="clear_active_filter", help="Reset all filters"):
+                            st.session_state['active_filter_count'] = 2
+                            st.session_state['active_reset_count'] += 1
+                            st.rerun()
+
+                st.dataframe(filtered_active_df, use_container_width=True)
+            else:
+                st.info("No active requests found.")
+
+            with st.expander("View Completed Requests", expanded=False):
+                if not completed_df.empty:
+                    completed_df = completed_df.drop(columns=["_id", "test_time"], errors="ignore")
+                    completed_df = completed_df.sort_values(["status_updated_at"], ascending=[False])
+                    completed_df.reset_index(drop=True, inplace=True)
+                    completed_df.index = completed_df.index + 1
+                    completed_df.index.name = ""
+
+
+                    def normalize_column(x):
+                        if isinstance(x, list):
+                            return ", ".join(map(str, x))
+                        elif isinstance(x, dict):
+                            return str(x)
+                        elif pd.isnull(x):
+                            return ""
+                        else:
+                            return str(x)
+
+
+                    # Apply to all columns with object dtype
+                    for col in completed_df.columns:
+                        if completed_df[col].dtype == 'object':
+                            completed_df[col] = completed_df[col].apply(normalize_column)
+
+                    rename_dict = {k: v for k, v in COLUMN_DISPLAY_NAMES.items() if k in completed_df.columns}
+                    if "created_at" in completed_df.columns:
+                        rename_dict["created_at"] = "Created At"
+                    completed_df = completed_df.rename(columns=rename_dict)
+
+                    st.markdown("### Completed Requests")
+                    filtered_completed_df = completed_df.copy()
+                    show_filters = st.checkbox("Show Filter Options for Completed Requests")
+                    if show_filters:
+                        if 'completed_filter_count' not in st.session_state:
+                            st.session_state['completed_filter_count'] = 2
+                        if 'completed_reset_count' not in st.session_state:
+                            st.session_state['completed_reset_count'] = 0
+
+                        for i in range(st.session_state['completed_filter_count']):
+                            col1, col2 = st.columns([1, 1])
+                            with col1:
+                                filter_column = st.selectbox(
+                                    "Filter by",
+                                    options=[""] + list(completed_df.columns),
+                                    key=f"completed_filter_column_{i}_{st.session_state['completed_reset_count']}",
+                                    index=0,
+                                    label_visibility="collapsed"
+                                )
+                            with col2:
+                                filter_value = st.text_input(
+                                    "Value",
+                                    key=f"completed_filter_value_{i}_{st.session_state['completed_reset_count']}",
+                                    value="",
+                                    label_visibility="collapsed"
+                                )
+
+                            if filter_column and filter_value:
+                                filtered_completed_df = filtered_completed_df[
+                                    filtered_completed_df[filter_column].astype(str).str.contains(filter_value,
+                                                                                                  case=False, na=False)
+                                ]
+
+                        col_add, col_clear = st.columns([1, 1])
+                        with col_add:
+                            if st.button("Add Filter", key="add_completed_filter", help="Add another filter"):
+                                st.session_state['completed_filter_count'] += 1
+                                st.rerun()
+                        with col_clear:
+                            if st.button("Clear Filters", key="clear_completed_filter", help="Reset all filters"):
+                                st.session_state['completed_filter_count'] = 2
+                                st.session_state['completed_reset_count'] += 1
+                                st.rerun()
+
+                    st.dataframe(filtered_completed_df, use_container_width=True)
+                else:
+                    st.info("No completed requests found.")
+
+    # --- TAB 2: Edit Requests (User's Own Rows) ---
+    with tab_objects[1]:
+        st.header("✏️ Edit Your Requests")
+
+        if st.session_state["role"] == "admin":
+            user_rows = collection.find()
+        else:
+            user_rows = collection.find({"test_owner": st.session_state["user"]})
+        items = list(user_rows)
+        df = pd.DataFrame(items)
+
+        if df.empty:
+            st.info("No requests to edit or delete.")
+        else:
+            if '_id' not in df.columns:
+                st.error("Error: '_id' column missing in MongoDB data. Please check the database.")
+                st.stop()
+            df['hidden_id'] = df['_id'].astype(str)
+
+            if 'status' not in df.columns:
+                df['status'] = 'Hold'
+
+            active_df = df[df['status'].isin(['Hold', 'In Progress'])].copy()
+            completed_df = df[df['status'] == 'Done'].copy()
+
+            if not active_df.empty:
+                active_df = active_df.drop(columns=["_id", "test_time"], errors="ignore")
+                active_df = active_df.sort_values(["Priority", "created_at"], ascending=[True, True])
+                active_df.reset_index(drop=True, inplace=True)
+                active_df.index = range(1, len(active_df) + 1)
+                active_df.index.name = ""
+                active_df['Select'] = False
+                if st.session_state["role"] != "admin":
+                    active_df = active_df.drop(columns=["Priority", "created_at"], errors="ignore")
+                rename_dict = {k: v for k, v in COLUMN_DISPLAY_NAMES.items() if
+                               k in active_df.columns and k != 'hidden_id'}
+                active_df = active_df.rename(columns=rename_dict)
+
+                column_order = [
+                    "Select", "Test Name", "Owner", "Status", "Chips", "Run EST (Min)", "Test Flow",
+                    "Firmware Version", "Break Points", "Skip Calibration", "Final State",
+                    "Run Init", "RunInit Type", "Itr Init", "ItrInit Type", "Equipment",
+                    "Test Params", "Corners", "Lane List", "Description", "Comments",
+                    "Priority", "Created At", "hidden_id"
+                ]
+                available_columns = [col for col in column_order if col in active_df.columns]
+                active_df = active_df[available_columns]
+
+                if 'hidden_id' not in active_df.columns:
+                    st.error("Error: 'hidden_id' missing in active_df. Please check data processing.")
+                    st.stop()
+                id_series = active_df['hidden_id'].copy()
+
+                display_df = active_df.drop(columns=['hidden_id'], errors='ignore')
+
+                column_config = {
+                    "Created At": st.column_config.Column(
+                        disabled=True) if "Created At" in display_df.columns else None,
+                    "Select": st.column_config.CheckboxColumn(required=True),
+                    "Status": st.column_config.SelectboxColumn(
+                        options=["Hold", "In Progress", "Done"],
+                        default="Hold",
+                    ) if "Status" in display_df.columns else None
+                }
+                st.subheader("Active Requests")
+                edited_df = st.data_editor(
+                    display_df,
+                    use_container_width=True,
+                    column_config=column_config,
+                    key=f"edit_active_data_editor_{st.session_state.get('active_reset_count', 0)}"
+                )
+
+                edited_df['hidden_id'] = id_series
+
+                selected_rows = edited_df[edited_df['Select'] == True]
+                if st.button("Delete Selected Rows", key="delete_active_rows"):
+                    if not selected_rows.empty:
+                        for _, row in selected_rows.iterrows():
+                            row_id = row['hidden_id']
+                            if st.session_state["role"] == "admin" or row["Owner"] == st.session_state["user"]:
+                                collection.delete_one({"_id": ObjectId(row_id)})
+                                st.success(f"✅ Deleted request {row_id}.")
+                            else:
+                                st.warning("❌ You can only delete your own requests.")
+                        st.rerun()
+                    else:
+                        st.warning("❌ No requests selected for deletion.")
+
+                changes_made = False
+                for _, row in edited_df.iterrows():
+                    if row['hidden_id']:
+                        original_record = collection.find_one({"_id": ObjectId(row['hidden_id'])})
+                        if original_record:
+                            if st.session_state["role"] == "admin" or original_record["test_owner"] == st.session_state[
+                                "user"]:
+                                updated_data = {
+                                    "test_name": row["Test Name"],
+                                    "test_owner": row["Owner"],
+                                    "test_time": row["test_time"] if "test_time" in row else original_record.get(
+                                        "test_time", 0.0),
+                                    "chips_num": row["Chips"],
+                                    "Run_EST": row["Run EST (Min)"],
+                                    "test_flow": row["Test Flow"],
+                                    "Fw_Expected_Version_List": row["Firmware Version"],
+                                    "Break_point_List": row["Break Points"],
+                                    "Skip_Calib_List": row["Skip Calibration"],
+                                    "Final_State": row["Final State"],
+                                    "Run_Init": row["Run Init"],
+                                    "RunInit_Type": row["RunInit Type"],
+                                    "Itr_Init": row["Itr Init"],
+                                    "ItrInit_Type": row["ItrInit Type"],
+                                    "Equipment": row["Equipment"],
+                                    "Test_params": row["Test Params"],
+                                    "Corners": row["Corners"],
+                                    "Lane_List": row["Lane List"],
+                                    "description": row["Description"],
+                                    "comments": row["Comments"],
+                                    "status": row["Status"],
+                                    "status_updated_at": datetime.now() if row["Status"] != original_record.get(
+                                        "status", "") else original_record.get("status_updated_at", datetime.now())
+                                }
+                                if st.session_state["role"] == "admin":
+                                    updated_data["Priority"] = int(
+                                        row["Priority"]) if "Priority" in row else original_record.get("Priority", 0)
+                                if any(updated_data[key] != original_record.get(key, None) for key in updated_data) or \
+                                        row["Status"] != original_record.get("status", ""):
+                                    collection.update_one({"_id": ObjectId(row['hidden_id'])}, {"$set": updated_data})
+                                    changes_made = True
+                                    if row["Status"] == "Done" and original_record.get("status") != "Done":
+                                        st.rerun()
+                            else:
+                                st.warning(f"❌ You can only edit your own requests: {row['Test Name']}")
+
+                if changes_made:
+                    st.success("✅ Changes saved successfully.")
+            else:
+                st.info("No active requests to edit or delete.")
+
+            with st.expander("View Completed Requests", expanded=False):
+                if not completed_df.empty:
+                    completed_df = completed_df.drop(columns=["_id", "test_time", "hidden_id"], errors="ignore")
+                    completed_df = completed_df.sort_values(["status_updated_at"], ascending=[False])
+                    completed_df.reset_index(drop=True, inplace=True)
+                    completed_df.index = range(1, len(completed_df) + 1)
+                    completed_df.index.name = ""
+                    rename_dict = {k: v for k, v in COLUMN_DISPLAY_NAMES.items() if
+                                   k in completed_df.columns and k != 'hidden_id'}
+                    if "created_at" in completed_df.columns:
+                        rename_dict["created_at"] = "Created At"
+                    completed_df = completed_df.rename(columns=rename_dict)
+
+                    st.markdown("### Completed Requests")
+
+
+                    def normalize_column(x):
+                        if isinstance(x, list):
+                            return ", ".join(map(str, x))
+                        elif isinstance(x, dict):
+                            return str(x)
+                        elif pd.isnull(x):
+                            return ""
+                        else:
+                            return str(x)
+
+
+                    # Clean up all object-type columns
+                    for col in filtered_completed_df.columns:
+                        if filtered_completed_df[col].dtype == 'object':
+                            try:
+                                filtered_completed_df[col] = filtered_completed_df[col].apply(normalize_column)
+                            except Exception as e:
+                                st.warning(f"Skipping column {col} due to error: {e}")
+
+                    st.dataframe(filtered_completed_df, use_container_width=True)
+
+                else:
+                    st.info("No completed requests found.")
+
+    # --- TAB 3: Add Request ---
+    with tab_objects[2]:
+        st.markdown("### ➕ Add Request")
+        col1, col2 = st.columns(2)  # Split into two equal columns for the main layout
+
+        with col1:
+            test_owner = st.text_input("Test owner", value=st.session_state["user"], key="tab_test_owner")
+            test_name = st.text_input("Test name", key="tab_test_name")
+            test_time = st.number_input("Test time", value=0.0, step=1.0, key="tab_test_time")
+            chips_num = st.number_input("Number of chips", value=0, step=1, key="tab_chips_num")
+            test_flow = st.text_input("Test Flow", key="tab_test_flow")
+
+            # Final State with "Add New" option
+            final_state_options = ["DATA", "Add New"]
+            final_state = st.selectbox("Final State", final_state_options, key="tab_final_state")
+            if final_state == "Add New":
+                final_state = st.text_input("Enter Custom Final State", key="tab_final_state_custom")
+
+            # Run Init with "Add New" option
+            run_init_options = ["True", "False", "Add New"]
+            run_init = st.selectbox("Run Init", run_init_options, key="tab_run_init")
+            if run_init == "Add New":
+                run_init = st.text_input("Enter Custom Run Init", key="tab_run_init_custom")
+
+            runinit_type = st.text_input("RunInit Type", key="tab_runinit_type")
+
+            # Itr Init with "Add New" option
+            itr_init_options = ["True", "False", "Add New"]
+            itr_init = st.selectbox("Itr Init", itr_init_options, key="tab_itr_init")
+            if itr_init == "Add New":
+                itr_init = st.text_input("Enter Custom Itr Init", key="tab_itr_init_custom")
+
+            itrinit_type = st.text_input("ItrInit Type", key="tab_itrinit_type")
+
+            # Initialize session state for each multi-select field (for custom values and selected values)
+            if "fw_expected_versions" not in st.session_state:
+                st.session_state["fw_expected_versions"] = []  # Custom values
+            if "fw_selected_versions" not in st.session_state:
+                st.session_state["fw_selected_versions"] = []  # All selected values (predefined + custom)
+            if "break_points" not in st.session_state:
+                st.session_state["break_points"] = []
+            if "break_points_selected" not in st.session_state:
+                st.session_state["break_points_selected"] = []
+            if "skip_calibs" not in st.session_state:
+                st.session_state["skip_calibs"] = []
+            if "skip_calibs_selected" not in st.session_state:
+                st.session_state["skip_calibs_selected"] = []
+            if "equipments" not in st.session_state:
+                st.session_state["equipments"] = []
+            if "equipments_selected" not in st.session_state:
+                st.session_state["equipments_selected"] = []
+            if "test_params_list" not in st.session_state:
+                st.session_state["test_params_list"] = []
+            if "test_params_selected" not in st.session_state:
+                st.session_state["test_params_selected"] = []
+            if "corners_list" not in st.session_state:
+                st.session_state["corners_list"] = []
+            if "corners_selected" not in st.session_state:
+                st.session_state["corners_selected"] = []
+
+            # Base values (defaults) + values from DB
+            fw_expected_version_options = ["1p56p0p0"] + load_dynamic_options("fw_expected_version")
+            break_point_options = ["STAGE_MANAGE_START.START_PRE_DSP"] + load_dynamic_options("break_point")
+            skip_calib_options = ['VGA_RLOAD', 'PREBUF_RLOAD', 'TX_DATA_PD', 'TX_OUTPUT_COMMON',
+                                  'TX_RIPPLE', 'ADC_SAR_FULLSCALE'] + load_dynamic_options("skip_calib")
+            equipment_options = ["DCMON", "SIG_GEN", "SWITCH",
+                                 "BERT(falcon tc2 chip)"] + load_dynamic_options("equipment")
+            test_params_options = ["Ber, OrderedDict([('num_symbs', 0)])"] + load_dynamic_options("test_params")
+            corners_options = ["NTNV", "HTHV"] + load_dynamic_options("corners")
+
+
+            # Callback functions for adding custom values
+            def add_firmware_version():
+                fw_custom = st.session_state.get("tab_fw_expected_version_list_custom", "")
+                if fw_custom and fw_custom not in (
+                        fw_expected_version_options + st.session_state["fw_expected_versions"]):
+                    st.session_state["fw_expected_versions"].append(fw_custom)
+                    st.session_state["fw_selected_versions"] = st.session_state["fw_selected_versions"] + [
+                        fw_custom]
+                    st.session_state["tab_fw_expected_version_list_custom"] = ""
+
+                    # 🔁 Save to MongoDB
+                    save_new_option("fw_expected_version", fw_custom)
+
+
+            def add_break_point():
+                break_point_custom = st.session_state.get("tab_break_point_list_custom", "")
+                if break_point_custom and break_point_custom not in (
+                        break_point_options + st.session_state["break_points"]):
+                    st.session_state["break_points"].append(break_point_custom)
+                    st.session_state["break_points_selected"] = st.session_state[
+                                                                    "break_points_selected"] + [
+                                                                    break_point_custom]
+                    st.session_state["tab_break_point_list_custom"] = ""
+                    save_new_option("break_point", break_point_custom)
+
+
+            def add_skip_calib():
+                skip_calib_custom = st.session_state.get("tab_skip_calib_list_custom", "")
+                if skip_calib_custom and skip_calib_custom not in (
+                        skip_calib_options + st.session_state["skip_calibs"]):
+                    st.session_state["skip_calibs"].append(skip_calib_custom)
+                    st.session_state["skip_calibs_selected"] = st.session_state["skip_calibs_selected"] + [
+                        skip_calib_custom]
+                    st.session_state["tab_skip_calib_list_custom"] = ""
+                    save_new_option("skip_calib", skip_calib_custom)
+
+
+            def add_equipment():
+                equipment_custom = st.session_state.get("tab_equipment_custom", "")
+                if equipment_custom and equipment_custom not in (
+                        equipment_options + st.session_state["equipments"]):
+                    st.session_state["equipments"].append(equipment_custom)
+                    st.session_state["equipments_selected"] = st.session_state["equipments_selected"] + [
+                        equipment_custom]
+                    st.session_state["tab_equipment_custom"] = ""
+                    save_new_option("equipment", equipment_custom)
+
+
+            def add_test_param():
+                test_params_custom = st.session_state.get("tab_test_params_custom", "")
+                if test_params_custom and test_params_custom not in (
+                        test_params_options + st.session_state["test_params_list"]):
+                    st.session_state["test_params_list"].append(test_params_custom)
+                    st.session_state["test_params_selected"] = st.session_state["test_params_selected"] + [
+                        test_params_custom]
+                    st.session_state["tab_test_params_custom"] = ""
+                    save_new_option("test_params", test_params_custom)
+
+
+            def add_corner():
+                corners_custom = st.session_state.get("tab_corners_custom", "")
+                if corners_custom and corners_custom not in (
+                        corners_options + st.session_state["corners_list"]):
+                    st.session_state["corners_list"].append(corners_custom)
+                    st.session_state["corners_selected"] = st.session_state["corners_selected"] + [
+                        corners_custom]
+                    st.session_state["tab_corners_custom"] = ""
+                    save_new_option("corners", corners_custom)
+
+
+            # Firmware Expected Version List
+            col1, col2, col3 = st.columns([2, 1, 1])
+            with col1:
+                fw_expected_version_list = st.multiselect(
+                    "Firmware Expected Version List",
+                    options=fw_expected_version_options + st.session_state["fw_expected_versions"],
+                    default=st.session_state["fw_selected_versions"],
+                    key="tab_fw_expected_version_list"
+                )
+            st.session_state["fw_selected_versions"] = fw_expected_version_list
+            with col2:
+                st.text_input("Add Firmware", key="tab_fw_expected_version_list_custom")
+            with col3:
+                st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
+                st.button("Add Firmware", key="add_fw_expected_version", on_click=add_firmware_version)
+
+            # Break Point List
+            col1, col2, col3 = st.columns([2, 1, 1])
+            with col1:
+                break_point_list = st.multiselect(
+                    "Break Point List",
+                    options=break_point_options + st.session_state["break_points"],
+                    default=st.session_state["break_points_selected"],
+                    key="tab_break_point_list"
+                )
+            st.session_state["break_points_selected"] = break_point_list
+            with col2:
+                st.text_input("Add Break Point", key="tab_break_point_list_custom")
+            with col3:
+                st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
+                st.button("Add Break Point", key="add_break_point", on_click=add_break_point)
+
+            # Skip Calib List
+            col1, col2, col3 = st.columns([2, 1, 1])
+            with col1:
+                skip_calib_list = st.multiselect(
+                    "Skip Calib List",
+                    options=skip_calib_options + st.session_state["skip_calibs"],
+                    default=st.session_state["skip_calibs_selected"],
+                    key="tab_skip_calib_list"
+                )
+            st.session_state["skip_calibs_selected"] = skip_calib_list
+            with col2:
+                st.text_input("Add Skip Calib", key="tab_skip_calib_list_custom")
+            with col3:
+                st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
+                st.button("Add Skip Calib", key="add_skip_calib", on_click=add_skip_calib)
+
+            # Equipment
+            col1, col2, col3 = st.columns([2, 1, 1])
+            with col1:
+                equipment = st.multiselect(
+                    "Equipment",
+                    options=equipment_options + st.session_state["equipments"],
+                    default=st.session_state["equipments_selected"],
+                    key="tab_equipment"
+                )
+            st.session_state["equipments_selected"] = equipment
+            with col2:
+                st.text_input("Add Equipment", key="tab_equipment_custom")
+            with col3:
+                st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
+                st.button("Add Equipment", key="add_equipment", on_click=add_equipment)
+
+            # Test params
+            col1, col2, col3 = st.columns([2, 1, 1])
+            with col1:
+                test_params = st.multiselect(
+                    "Test params",
+                    options=test_params_options + st.session_state["test_params_list"],
+                    default=st.session_state["test_params_selected"],
+                    key="tab_test_params"
+                )
+            st.session_state["test_params_selected"] = test_params
+            with col2:
+                st.text_input("Add Test Param", key="tab_test_params_custom")
+            with col3:
+                st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
+                st.button("Add Test Param", key="add_test_param", on_click=add_test_param)
+
+            # Corners
+            col1, col2, col3 = st.columns([2, 1, 1])
+            with col1:
+                corners = st.multiselect(
+                    "Corners",
+                    options=corners_options + st.session_state["corners_list"],
+                    default=st.session_state["corners_selected"],
+                    key="tab_corners"
+                )
+            st.session_state["corners_selected"] = corners
+            with col2:
+                st.text_input("Add Corner", key="tab_corners_custom")
+            with col3:
+                st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
+                st.button("Add Corner", key="add_corner", on_click=add_corner)
+
+            # Lane List with "Add New" option
+            lane_list_options = ["0", "1", "Add New"]
+            lane_list = st.selectbox("Lane List", lane_list_options, key="tab_lane_list")
+            if lane_list == "Add New":
+                lane_list = st.text_input("Enter Custom Lane", key="tab_lane_list_custom")
+
+            falcon_config = st.text_input("FalconConfig", key="tab_falcon_config")
+            comments = st.text_area("Comments", key="tab_comments")
+            description = st.text_area("Description", key="tab_description")
+
+
+
+            Run_EST = int(test_time) * int(chips_num)
+            if st.button("Add Request", key="tab_add_request_button"):
+                collection.insert_one({
+                    "test_name": test_name,
+                    "test_owner": test_owner,
+                    "test_time": test_time,
+                    "chips_num": chips_num,
+                    "Run_EST": Run_EST,
+                    "test_flow": test_flow,
+                    "Fw_Expected_Version_List": fw_expected_version_list,
+                    "Break_point_List": break_point_list,
+                    "Skip_Calib_List": skip_calib_list,
+                    "Final_State": final_state,
+                    "Run_Init": run_init,
+                    "RunInit_Type": runinit_type,
+                    "Itr_Init": itr_init,
+                    "ItrInit_Type": itrinit_type,
+                    "Equipment": equipment,
+                    "Test_params": test_params,
+                    "Corners": corners,
+                    "Lane_List": lane_list,
+                    "description": description,
+                    "comments": comments,
+                    "FalconConfig": falcon_config,
+                    "created_at": datetime.now(),
+                    "Priority": 99,
+                    "status": "Hold",
+                    "status_updated_at": datetime.now()
+                })
+                # Reset session state for multi-select fields after submission
+                st.session_state["fw_expected_versions"] = []
+                st.session_state["fw_selected_versions"] = []
+                st.session_state["break_points"] = []
+                st.session_state["break_points_selected"] = []
+                st.session_state["skip_calibs"] = []
+                st.session_state["skip_calibs_selected"] = []
+                st.session_state["equipments"] = []
+                st.session_state["equipments_selected"] = []
+                st.session_state["test_params_list"] = []
+                st.session_state["test_params_selected"] = []
+                st.session_state["corners_list"] = []
+                st.session_state["corners_selected"] = []
+                st.success("✅ Request added successfully!")
+                st.rerun()
+    with col2:
+        pass  # Leave col2 empty to ensure col1 takes half the page
+
+    # --- TAB 4: Manage Users (Admin Only) ---
+    if "👤 Manage Users" in main_tabs:
+        with tab_objects[3]:
+            st.header("👤 Manage Users")
+            user_table = list(users_col.find({}, {"_id": 0}))
+            if user_table:
+                df_users = pd.DataFrame(user_table)
+                df_users.drop(columns=["password"], inplace=True, errors="ignore")
+                st.dataframe(df_users)
+            else:
+                st.info("No users found.")
+
+            tab1, tab2, tab3 = st.tabs(["➕ Add User", "🔑 Change Password", "🗑️ Delete User"])
+
+            with tab1:
+                st.subheader("Add New User")
+                new_user = st.text_input("Username", key="add_user")
+                new_pass = st.text_input("Password", type="password", key="add_pw")
+                new_role = st.selectbox("Role", ["user", "admin"], key="role_add")
+                if st.button("Create User"):
+                    if not new_user or not new_pass:
+                        st.warning("Please enter username and password.")
+                    elif users_col.find_one({"username": new_user.strip().lower()}):
+                        st.warning("User already exists.")
+                    else:
+                        hashed_pw = bcrypt.hashpw(new_pass.encode(), bcrypt.gensalt())
+                        users_col.insert_one({
+                            "username": new_user.strip().lower(),
+                            "password": hashed_pw,
+                            "role": new_role
+                        })
+                        st.success(f"✅ User '{new_user}' added.")
+                        st.rerun()
+
+            with tab2:
+                st.subheader("Change User Password")
+                users = list(users_col.find({}, {"_id": 0}))
+                usernames = [u["username"] for u in users]
+                selected_user = st.selectbox("Select user", usernames, key="change_user")
+                new_pw = st.text_input("New Password", type="password", key="new_pw")
+                if st.button("Update Password"):
+                    hashed_pw = bcrypt.hashpw(new_pw.encode(), bcrypt.gensalt())
+                    users_col.update_one(
+                        {"username": selected_user},
+                        {"$set": {"password": hashed_pw}}
+                    )
+                    st.success(f"Password updated for '{selected_user}'")
+
+            with tab3:
+                st.subheader("Delete User")
+                users = list(users_col.find({}, {"_id": 0}))
+                usernames = [u["username"] for u in users if u["username"] != "admin"]
+                if not usernames:
+                    st.info("No users to delete.")
+                else:
+                    selected_to_delete = st.selectbox("Select user", usernames, key="delete_user")
+                    if st.button("Delete User"):
+                        users_col.delete_one({"username": selected_to_delete})
+                        st.success(f"User '{selected_to_delete}' deleted.")
+                        st.rerun()
+
+    # --- TAB 5: Access Requests (Admin Only) ---
+    if "📩 Access Requests" in main_tabs:
+        with tab_objects[4]:
+            st.header("📩 Access Requests")
+            raw_requests = list(access_requests_col.find({}))  # includes _id for deletion
+
+            if raw_requests:
+                requests = [{k: v for k, v in doc.items() if k != '_id'} for doc in raw_requests]
+                df_requests = pd.DataFrame(requests)
+                df_requests = df_requests.rename(
+                    columns={k: v for k, v in COLUMN_DISPLAY_NAMES.items() if k in df_requests.columns}
+                )
+
+                # --- Add Approve All button on the right ---
+                left_col, right_col = st.columns([4, 1])  # Adjust ratio to push button to the right
+                with right_col:
+                    if st.button("Approve All", key="approve_all", help="Approve all pending requests"):
+                        for request in raw_requests:
+                            username = request["username"].strip().lower()
+                            email = request["email"].strip().lower()
+                            hashed_pw = bcrypt.hashpw("1234".encode(), bcrypt.gensalt())
+                            users_col.insert_one({
+                                "username": username,
+                                "password": hashed_pw,
+                                "role": "user",
+                                "email": email
+                            })
+                            access_requests_col.delete_one({"_id": request["_id"]})
+
+                            try:
+                                smtp_server = "sc-out.intel.com"
+                                smtp_port = 25
+                                sender_email = "yosef.tal@intel.com"
+
+                                subject = "✅ MiniMax Access Approved"
+                                body = (
+                                    f"Dear {username},\n\n"
+                                    f"Your access request for the MiniMax app has been approved.\n\n"
+                                    f"👤 Username: {username}\n"
+                                    f"🔑 Password: 1234 (please change it after logging in)\n\n"
+                                    f"Best,\nMiniMax Admin"
+                                )
+                                msg = MIMEText(body, _subtype="plain", _charset="utf-8")
+                                msg["Subject"] = subject
+                                msg["From"] = sender_email
+                                msg["To"] = email
+
+                                with smtplib.SMTP(smtp_server, smtp_port) as server:
+                                    server.send_message(msg)
+
+                                st.toast(f"📧 Approval email sent to {email}", icon="📨")
+                            except Exception as e:
+                                st.toast(f"⚠️ Failed to send email to {email}: {e}", icon="⚠️")
+
+                        st.session_state["current_tab"] = "Access Requests"
+                        st.rerun()
+
+                # --- Render table headers with st.columns ---
+                header1, header2, header3, header4, header5 = st.columns([1.5, 1.5, 1, 1, 1])
+                with header1:
+                    st.markdown("**Username**")
+                with header2:
+                    st.markdown("**Email**")
+                with header3:
+                    st.markdown("**Request Timestamp**")
+                with header4:
+                    st.markdown("**Approve**")
+                with header5:
+                    st.markdown("**Deny**")
+
+                for index, row in df_requests.iterrows():
+                    full_row = raw_requests[index]  # includes _id
+                    with st.container():
+                        st.markdown('<hr>', unsafe_allow_html=True)
+
+                        col1, col2, col3, col4, col5 = st.columns([1.5, 1.5, 1, 1, 1])
+                        with col1:
+                            st.write(row['Username'])
+                        with col2:
+                            st.write(row['Email'])
+                        with col3:
+                            if isinstance(row['Request Timestamp'], datetime):
+                                st.write(row['Request Timestamp'].strftime('%Y-%m-%d %H:%M'))
+                            else:
+                                st.write(row['Request Timestamp'])
+                        with col4:
+                            if st.button(
+                                    "Approve",
+                                    key=f"approve_{row['Username']}_{index}_{row['Request Timestamp']}"
+                            ):
+                                # Perform DB update
+                                username = row['Username'].strip().lower()
+                                email = row['Email'].strip().lower()
+                                hashed_pw = bcrypt.hashpw("1234".encode(), bcrypt.gensalt())
+                                users_col.insert_one({
+                                    "username": username,
+                                    "password": hashed_pw,
+                                    "role": "user",
+                                    "email": email
+                                })
+                                access_requests_col.delete_one({"_id": full_row["_id"]})
+
+                                try:
+                                    smtp_server = "sc-out.intel.com"
+                                    smtp_port = 25
+                                    sender_email = "yosef.tal@intel.com"
+
+                                    subject = "✅ MiniMax Access Approved"
+                                    body = (
+                                        f"Dear {username},\n\n"
+                                        f"Your access request for the MiniMax app has been approved.\n\n"
+                                        f"👤 Username: {username}\n"
+                                        f"🔑 Password: 1234 (please change it after logging in)\n\n"
+                                        f"MiniMax site: http://10.220.38.27:8501/\n\n"
+                                        f"Best,\nMiniMax Admin"
+                                    )
+                                    msg = MIMEText(body, _subtype="plain", _charset="utf-8")
+                                    msg["Subject"] = subject
+                                    msg["From"] = sender_email
+                                    msg["To"] = email
+
+                                    with smtplib.SMTP(smtp_server, smtp_port) as server:
+                                        server.send_message(msg)
+
+                                    st.toast(f"📧 Approval email sent to {email}", icon="📨")
+                                except Exception as e:
+                                    st.toast(f"⚠️ Failed to send email: {e}", icon="⚠️")
+
+                                st.session_state["current_tab"] = "Access Requests"
+                                st.rerun()
+
+                        with col5:
+                            if st.button(
+                                    "Deny",
+                                    key=f"deny_{row['Username']}_{index}_{row['Request Timestamp']}"
+                            ):
+                                access_requests_col.delete_one({"_id": full_row["_id"]})
+                                st.session_state["current_tab"] = "Access Requests"
+                                st.rerun()
+            else:
+                st.info("No access requests found.")
+
+st.markdown('</div>', unsafe_allow_html=True)

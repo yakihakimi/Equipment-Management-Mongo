@@ -245,7 +245,6 @@ class EquipmentManagementApp:
         if hasattr(self, 'Equipment_select_options_db_df') and self.Equipment_select_options_db_df is not None:
             if col_name in self.Equipment_select_options_db_df.columns:
                 self.Equipment_select_options_db_df = self.Equipment_select_options_db_df.drop(columns=[col_name])
-        
         return update_result.modified_count
     
     def rename_column_in_select_options_db(self, old_col_name, new_col_name):
@@ -413,12 +412,6 @@ class EquipmentManagementApp:
             hashed_password = self._hash_password(password)
             return self.users[username]["password"] == hashed_password
         return False
-    
-    def _is_admin(self):
-        """Check if current user is admin (case-insensitive)."""
-        user_role = str(st.session_state.get('user_role', '')).lower()
-        username = str(st.session_state.get('username', '')).lower()
-        return user_role == "admin" or username == "admin"
     
     def _load_sessions_from_file(self):
         """Load sessions from file storage."""
@@ -1927,7 +1920,7 @@ class EquipmentManagementApp:
         
     def save_column_order_ui(self):
         """UI for admin to save the current Equipment column order"""
-        if self._is_admin():
+        if st.session_state.user_role == "admin":
             with st.expander("💾 Save Equipment Column Order"):
                 st.info("💡 Configure your preferred Equipment column order below and save it.")
                 
@@ -1956,7 +1949,7 @@ class EquipmentManagementApp:
                             new_order = [col.strip() for col in equipment_order_input.split('\n') if col.strip()]
                         else:
                             new_order = [col.strip() for col in equipment_order_input.split(',') if col.strip()]
-                                
+                        
                         # Validate that all columns exist
                         invalid_columns = [col for col in new_order if col not in equipment_default]
                         missing_columns = [col for col in equipment_default if col not in new_order]
@@ -1980,7 +1973,7 @@ class EquipmentManagementApp:
 
     def save_select_options_column_order_ui(self):
         """UI for admin to save the current Select Options column order"""
-        if self._is_admin():
+        if st.session_state.user_role == "admin":
             with st.expander("💾 Save Select Options Column Order"):
                 st.info("💡 Configure your preferred Select Options column order below and save it.")
                 
@@ -2059,7 +2052,7 @@ class EquipmentManagementApp:
     
     def save_select_options_filter_order_ui(self):
         """UI for admin to save the current Equipment Select Options Filter order"""
-        if self._is_admin():
+        if st.session_state.user_role == "admin":
             with st.expander("🔧 Save Equipment Select Options Filter Order"):
                 # Get excluded filter columns (same as used in Equipment_select_options_Filters)
                 excluded_filter_cols = ["ID", "check", "uuid", "index"]  # You can modify this list as needed
@@ -2275,7 +2268,7 @@ class EquipmentManagementApp:
 
     def save_filter_order_ui(self):
         """UI for admin to save the current Equipment Filter order"""
-        if self._is_admin():
+        if st.session_state.user_role == "admin":
             with st.expander("🔧 Save Equipment Filter Order"):
                 # Get excluded filter columns (same as used in Equipment_Filters)
                 excluded_filter_cols = ["ID", "check", "uuid"]  # You can modify this list as needed
@@ -2622,9 +2615,34 @@ class EquipmentManagementApp:
                 st.info("No select options data available")
 
     def Equipment_select_options_Filters(self):
+        # Initialize edited_select_options_df to prevent AttributeError
+        if not hasattr(self, 'edited_select_options_df'):
+            self.edited_select_options_df = pd.DataFrame()
+        
         # Initialize session state to reduce notification noise during cell selection
         if 'show_selection_messages' not in st.session_state:
             st.session_state['show_selection_messages'] = False  # Reduce notification noise
+        
+        # Initialize grid key for AgGrid stability
+        if 'select_options_grid_key' not in st.session_state:
+            st.session_state['select_options_grid_key'] = 0
+        
+        # Initialize editing state tracker to prevent first-edit refresh
+        if 'select_options_editing_mode' not in st.session_state:
+            st.session_state['select_options_editing_mode'] = False
+        
+        # Track if this is a fresh page load or filter change to clear edited data
+        current_page_signature = f"select_options_{len(self.Equipment_select_options_db_df) if hasattr(self, 'Equipment_select_options_db_df') and self.Equipment_select_options_db_df is not None else 0}"
+        if 'select_options_page_signature' not in st.session_state:
+            st.session_state['select_options_page_signature'] = current_page_signature
+        elif st.session_state['select_options_page_signature'] != current_page_signature:
+            # Page data has changed, clear edited data and increment grid key
+            if 'select_options_edited_data' in st.session_state:
+                del st.session_state['select_options_edited_data']
+            st.session_state['select_options_grid_key'] += 1
+            st.session_state['select_options_page_signature'] = current_page_signature
+            # Reset editing mode on page change
+            st.session_state['select_options_editing_mode'] = False
         
         # --- Inline filter column (not sidebar) ---
         # Print the current filter state
@@ -2913,6 +2931,37 @@ class EquipmentManagementApp:
             
             # Enable adding new rows (only for users with edit permissions)
             if permissions["can_edit"]:
+                # Add JavaScript to automatically capture edits when cells are changed
+                # JavaScript will be defined directly in JsCode calls below
+                function onCellValueChanged(params) {
+                    // Mark editing mode as active and trigger capture
+                    console.log('Cell value changed detected');
+                    
+                    // Set editing mode flag via Streamlit's experimental fragment mechanism
+                    if (window.parent && window.parent.streamlit) {
+                        window.parent.streamlit.setComponentValue('editing_mode', true);
+                    }
+                    
+                    // Try to find and click the capture button automatically
+                    setTimeout(function() {
+                        const captureBtn = window.parent.document.querySelector('[data-testid="stButton"] button[aria-label*="Capture"]');
+                        if (captureBtn && captureBtn.textContent.includes('� Manual Capture')) {
+                            captureBtn.click();
+                        }
+                    }, 100);
+                }
+                
+                function onCellEditingStopped(params) {
+                    // Also trigger on editing stopped for better coverage
+                    setTimeout(function() {
+                        const captureBtn = window.parent.document.querySelector('[data-testid="stButton"] button[aria-label*="Capture"]');
+                        if (captureBtn && captureBtn.textContent.includes('📝 Manual Capture')) {
+                            captureBtn.click();
+                        }
+                    }, 100);
+                }
+                """
+                
                 gb.configure_grid_options(
                     enableRangeSelection=True,
                     rowSelection='multiple',
@@ -2922,7 +2971,40 @@ class EquipmentManagementApp:
                     suppressMultiRangeSelection=False,
                     stopEditingWhenCellsLoseFocus=True,  # Auto-save when losing focus
                     undoRedoCellEditing=True,  # Enable undo/redo for better UX
-                    undoRedoCellEditingLimit=20  # Limit undo history
+                    undoRedoCellEditingLimit=20,  # Limit undo history
+                    enterMovesDown=False,  # Prevent Enter from moving to next row
+                    enterMovesDownAfterEdit=False,  # Prevent Enter from moving after edit
+                    suppressDragLeaveHidesColumns=True,  # Prevent accidental column hiding
+                    onCellValueChanged=JsCode("""
+                    function(params) {
+                        // Mark editing mode as active and trigger capture
+                        console.log('Cell value changed detected');
+                        
+                        // Set editing mode flag via Streamlit's experimental fragment mechanism
+                        if (window.parent && window.parent.streamlit) {
+                            window.parent.streamlit.setComponentValue('editing_mode', true);
+                        }
+                        
+                        // Try to find and click the capture button automatically
+                        setTimeout(function() {
+                            const captureBtn = window.parent.document.querySelector('[data-testid="stButton"] button[aria-label*="Capture"]');
+                            if (captureBtn && captureBtn.textContent.includes('Manual Capture')) {
+                                captureBtn.click();
+                            }
+                        }, 100);
+                    }
+                    """),  # Auto-capture on edit
+                    onCellEditingStopped=JsCode("""
+                    function(params) {
+                        // Also trigger on editing stopped for better coverage
+                        setTimeout(function() {
+                            const captureBtn = window.parent.document.querySelector('[data-testid="stButton"] button[aria-label*="Capture"]');
+                            if (captureBtn && captureBtn.textContent.includes('Manual Capture')) {
+                                captureBtn.click();
+                            }
+                        }, 100);
+                    }
+                    """)  # Also trigger on edit stop
                 )
             
             # Check for select all mode and force grid reload if needed
@@ -2931,7 +3013,32 @@ class EquipmentManagementApp:
                 st.session_state['force_select_options_grid_reload'] = False
             
             # Determine what data to display in AgGrid
-            grid_data = self.display_select_options_df
+            # Use edited data if available to preserve changes across reruns
+            if ('select_options_edited_data' in st.session_state and 
+                st.session_state['select_options_edited_data'] is not None and 
+                not st.session_state.get('force_reload_select_options_data', False)):
+                
+                # Convert to DataFrame if needed
+                if isinstance(st.session_state['select_options_edited_data'], list):
+                    grid_data = pd.DataFrame(st.session_state['select_options_edited_data'])
+                else:
+                    grid_data = st.session_state['select_options_edited_data'].copy()
+                
+                # Ensure it has the same columns as the display_df
+                if not grid_data.empty and hasattr(self, 'display_select_options_df') and not self.display_select_options_df.empty:
+                    # Add any missing columns from display_df
+                    for col in self.display_select_options_df.columns:
+                        if col not in grid_data.columns:
+                            grid_data[col] = ""
+                    # Reorder columns to match display_df
+                    grid_data = grid_data.reindex(columns=self.display_select_options_df.columns, fill_value='')
+            else:
+                # Use original data on first load or when forced reload is requested
+                grid_data = self.display_select_options_df.copy()
+                # Clear the force reload flag after using it
+                if 'force_reload_select_options_data' in st.session_state:
+                    st.session_state['force_reload_select_options_data'] = False
+            
             if (st.session_state.get('select_all_select_options_active', False) and 
                 'select_all_select_options_rows' in st.session_state and
                 len(st.session_state['select_all_select_options_rows']) < len(self.display_select_options_df)):
@@ -2941,26 +3048,59 @@ class EquipmentManagementApp:
                 if not grid_data.empty:
                     grid_data = grid_data.reindex(columns=self.display_select_options_df.columns, fill_value='')
             
-            # Display the AgGrid
-            grid_response = AgGrid(
-                grid_data,
-                gridOptions=gb.build(),
-                data_return_mode=DataReturnMode.FILTERED_AND_SORTED,
-                update_mode=GridUpdateMode.MODEL_CHANGED,
-                allow_unsafe_jscode=True,
-                fit_columns_on_grid_load=True,  # Enable auto-fitting columns to content
-                height=600,
-                theme='streamlit',
-                enable_enterprise_modules=False,
-                reload_data=force_reload,
-                key=f"select_options_grid_{st.session_state.get('select_options_grid_key', 0)}"
-            )
+            # Alternative: Use Streamlit's native data_editor instead of AgGrid for better edit handling
+            use_native_editor = st.toggle("🔄 Use Native Editor (Better for Editing)", value=False, key="use_native_editor_toggle", help="Switch to Streamlit's native data editor for more reliable editing")
             
-            # Get the selected rows for use in row management below
-            selected_rows = grid_response['selected_rows']
-            
-            # Get the currently visible/filtered data from AgGrid (after internal filtering)
-            visible_data = grid_response['data']  # This contains only the rows visible after AgGrid filtering
+            if use_native_editor:
+                # Use Streamlit's native data_editor
+                edited_data = st.data_editor(
+                    grid_data,
+                    use_container_width=True,
+                    height=600,
+                    num_rows="dynamic" if permissions["can_edit"] else "fixed",
+                    disabled=not permissions["can_edit"],
+                    key="select_options_data_editor"
+                )
+                
+                # Get selected rows for compatibility (empty for data_editor)
+                selected_rows = []
+                visible_data = edited_data
+                
+                # Store edited data directly
+                if edited_data is not None:
+                    st.session_state['select_options_edited_data'] = edited_data
+                
+                self.edited_select_options_df = edited_data
+                
+            else:
+                # Use AgGrid with smart update mode based on editing state
+                # Start with NO_UPDATE to prevent first-edit refresh, then switch to responsive mode
+                if st.session_state.get('select_options_editing_mode', False):
+                    # After first edit, use more responsive mode
+                    update_mode = GridUpdateMode.SELECTION_CHANGED
+                else:
+                    # For first edit, use NO_UPDATE to prevent refresh
+                    update_mode = GridUpdateMode.NO_UPDATE
+                
+                grid_response = AgGrid(
+                    grid_data,
+                    gridOptions=gb.build(),
+                    data_return_mode=DataReturnMode.FILTERED_AND_SORTED,
+                    update_mode=update_mode,  # Smart update mode based on editing state
+                    allow_unsafe_jscode=True,
+                    fit_columns_on_grid_load=True,  # Enable auto-fitting columns to content
+                    height=600,
+                    theme='streamlit',
+                    enable_enterprise_modules=False,
+                    reload_data=force_reload,
+                    key=f"select_options_grid_{st.session_state.get('select_options_grid_key', 0)}"
+                )
+                
+                # Get the selected rows for use in row management below
+                selected_rows = grid_response['selected_rows']
+                
+                # Get the currently visible/filtered data from AgGrid (after internal filtering)
+                visible_data = grid_response['data']  # This contains only the rows visible after AgGrid filtering
             
             # Handle refresh selection request with actual visible data
             if st.session_state.get('refresh_select_options_selection_requested', False):
@@ -3028,8 +3168,70 @@ class EquipmentManagementApp:
                 else:
                     st.info(f"✅ **{len(selected_rows)} row(s) selected** ")
             
-            # Get edited data from AgGrid
-            self.edited_select_options_df = grid_response['data']
+            # Get edited data from AgGrid and preserve in session state (moved outside selection check)
+            if 'grid_response' in locals():
+                current_edited_data = grid_response['data']
+                
+                # Auto-capture logic: Compare current data with previous data and auto-capture if different
+                previous_data_signature = st.session_state.get('select_options_data_signature', '')
+                if current_edited_data is not None and not (isinstance(current_edited_data, pd.DataFrame) and current_edited_data.empty):
+                    # Create a signature of the current data to detect changes
+                    if isinstance(current_edited_data, pd.DataFrame):
+                        current_data_signature = str(current_edited_data.values.tobytes() if not current_edited_data.empty else '')
+                    else:
+                        current_data_signature = str(current_edited_data)
+                    
+                    # If data has changed, auto-capture it and activate editing mode
+                    if current_data_signature != previous_data_signature:
+                        st.session_state['select_options_edited_data'] = current_edited_data
+                        st.session_state['select_options_data_signature'] = current_data_signature
+                        
+                        # Activate editing mode for better responsiveness on subsequent edits
+                        if not st.session_state.get('select_options_editing_mode', False):
+                            st.session_state['select_options_editing_mode'] = True
+                            st.session_state['select_options_grid_key'] += 1  # Force grid reload with new mode
+                            if st.session_state.get('show_auto_capture_messages', False):
+                                st.success("🔄 **Editing mode activated! Subsequent edits will be more responsive.**")
+                            st.rerun()  # Rerun to switch to responsive mode
+                        elif st.session_state.get('show_auto_capture_messages', False):
+                            st.success("🔄 **Auto-captured edits!**")
+                
+                # Add a toggle for auto-capture and manual button for backup
+                col1, col2, col3 = st.columns([1, 1, 3])
+                with col1:
+                    auto_capture = st.toggle("🔄 Auto-capture", value=True, key="auto_capture_toggle", help="Automatically capture edits when data changes")
+                    
+                with col2:
+                    if st.button("� Manual Capture", key="capture_edits_btn", help="Manually capture your current edits"):
+                        if current_edited_data is not None and not (isinstance(current_edited_data, pd.DataFrame) and current_edited_data.empty):
+                            st.session_state['select_options_edited_data'] = current_edited_data
+                            # Activate editing mode for better responsiveness
+                            if not st.session_state.get('select_options_editing_mode', False):
+                                st.session_state['select_options_editing_mode'] = True
+                                st.session_state['select_options_grid_key'] += 1
+                            st.success("✅ Edits captured!")
+                            st.rerun()
+                
+                # Always update the session state with current data to preserve edits (if auto-capture is enabled)
+                if auto_capture and current_edited_data is not None and not (isinstance(current_edited_data, pd.DataFrame) and current_edited_data.empty):
+                    st.session_state['select_options_edited_data'] = current_edited_data
+                elif not auto_capture and 'select_options_edited_data' not in st.session_state:
+                    # Fallback to grid_data if no edited data and no session state
+                    st.session_state['select_options_edited_data'] = grid_data
+                
+                # Use the preserved edited data
+                self.edited_select_options_df = st.session_state.get('select_options_edited_data', grid_data)
+            else:
+                # Fallback for native editor case - already handled above
+                pass
+            
+            # Final fallback to ensure edited_select_options_df is always defined
+            if not hasattr(self, 'edited_select_options_df') or self.edited_select_options_df is None:
+                # Use session state data, then grid_data, then display data as fallbacks
+                fallback_data = (st.session_state.get('select_options_edited_data') or 
+                               (grid_data if 'grid_data' in locals() else None) or 
+                               (self.display_select_options_df if hasattr(self, 'display_select_options_df') else pd.DataFrame()))
+                self.edited_select_options_df = fallback_data
             
             # Add Save Changes to Database button right after the AgGrid (only for users with edit permissions)
             if permissions["can_edit"]:
@@ -3263,6 +3465,14 @@ class EquipmentManagementApp:
                             # Apply column order and prepare display data
                             self.Equipment_select_options_db_df = self._apply_column_order(self.Equipment_select_options_db_df, 'select_options')
                             self.display_select_options_df = self._prepare_display_data_select_options()
+                            
+                            # Clear the edited data session state after successful save
+                            if 'select_options_edited_data' in st.session_state:
+                                del st.session_state['select_options_edited_data']
+                            
+                            # Set flag to force reload of fresh data on next render
+                            st.session_state['force_reload_select_options_data'] = True
+                            st.session_state['select_options_grid_key'] += 1
                             
                         st.rerun()
                     else:
@@ -3654,24 +3864,19 @@ class EquipmentManagementApp:
             
             # Get dropdown options from Equipment Select Options DB
             def get_dropdown_options(col):
-                # Always fetch fresh data from Equipment Select Options collection
-                try:
-                    select_options_records = list(self.Equipment_select_options.find({}, {'_id': 0, col: 1}))
-                    if select_options_records:
-                        select_options_df = pd.DataFrame(select_options_records)
-                        if col in select_options_df.columns:
-                            return sorted([
-                                str(x) for x in select_options_df[col].dropna().unique()
-                                if str(x).strip()
-                            ])
-                except Exception:
-                    pass
-                
-                # Fallback to unique values from current data
-                return sorted([
-                    str(x) for x in self.display_df[col].dropna().unique()
-                    if str(x).strip()
-                ])
+                if (hasattr(self, 'Equipment_select_options_db_df') and 
+                    self.Equipment_select_options_db_df is not None and
+                    col in self.Equipment_select_options_db_df.columns):
+                    return sorted([
+                        str(x) for x in self.Equipment_select_options_db_df[col].dropna().unique()
+                        if str(x).strip()
+                    ])
+                else:
+                    # Fallback to unique values from current data
+                    return sorted([
+                        str(x) for x in self.display_df[col].dropna().unique()
+                        if str(x).strip()
+                    ])
             
             # Get user permissions
             permissions = self.auth_manager.get_user_permissions()
@@ -4142,7 +4347,7 @@ class EquipmentManagementApp:
                 # Add column management functions here
                 self.Add_New_Column_to_Equipment_records_DB()
                 self.rename_column_in_equipment_records_db()
-                if self._is_admin(): 
+                if st.session_state.user_role == "admin": 
                     self.delete_column_from_equeipment_records_db()
         #########################################
 
@@ -4392,7 +4597,7 @@ class EquipmentManagementApp:
                 st.session_state.current_page = "Equipment Records"
 
             # Page navigation using selectbox - only for admin users
-            if self._is_admin():
+            if st.session_state.user_role == "admin":
                 page_options = ["Equipment Records", "Equipment Select Options", "🗂️ Backup & Restore", "👥 User Management"]
                 
                 # Callback function to handle page changes immediately
@@ -4414,7 +4619,7 @@ class EquipmentManagementApp:
                 tab1 = st.tabs(["Equipment Records"])[0]
             
             # Display the selected page content for admin users
-            if self._is_admin():
+            if st.session_state.user_role == "admin":
                 if st.session_state.current_page == "Equipment Records":
                     ##Equipment Records
                     
@@ -4437,7 +4642,7 @@ class EquipmentManagementApp:
                     
                 elif st.session_state.current_page == "Equipment Select Options":
                     #only admin can see 
-                    if self._is_admin():      
+                    if st.session_state.user_role == "admin":      
                         st.session_state.current_tab = "Equipment Select Options"
                         
                         # Load Equipment Select Options data only when this tab is accessed
@@ -4480,32 +4685,34 @@ class EquipmentManagementApp:
                         self.Equipment_select_options_Filters() 
 
                         # Column and Filter management for Equipment Select Options
-
+                        self.save_select_options_column_order_ui()
+                        self.save_select_options_filter_order_ui()
                         self.add_new_column_to_select_options_db()
                         self.rename_column_in_select_options_db_ui()
                         self.delete_column_from_select_options_db_ui()
                         
                         # Web Management section for Equipment Records
                         st.markdown("### Web Management")
-                        self.save_select_options_column_order_ui()
-                        self.save_select_options_filter_order_ui()
+                        
                         # Equipment Records Column and Filter Order Management
-                        # col1, col2 = st.columns(2)
-                        # 
-                        # with col1:
-                        #     if st.button("💾 Save Equipment Column Order", key="save_eq_column_order_select_options"):
-                        #         self.save_equipment_column_order_ui()
-                        # 
-                        # with col2:
-                        #     if st.button("🔧 Save Equipment Filter Order", key="save_eq_filter_order_select_options"):
-                        #         self.save_equipment_filter_order_ui()
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            if st.button("💾 Save Equipment Column Order", key="save_eq_column_order_select_options"):
+                                self.save_equipment_column_order_ui()
+                        
+                        with col2:
+                            if st.button("🔧 Save Equipment Filter Order", key="save_eq_filter_order_select_options"):
+                                self.save_equipment_filter_order_ui()
 
                     # st.dataframe(
                     #     self.Equipment_select_options_db_df,
                     #     use_container_width=True
                     # )
+                    
+                elif st.session_state.current_page == "🗂️ Backup & Restore":
                     # Backup and Restore page (only for admin users)
-                    if self._is_admin():
+                    if st.session_state.user_role == "admin":
                         st.session_state.current_tab = "Backup & Restore"
                         
                         # Show backup notifications if any
@@ -4761,7 +4968,7 @@ class EquipmentManagementApp:
 
                 elif st.session_state.current_page == "🗂️ Backup & Restore":
                     # Backup and Restore page (only for admin users)
-                    if self._is_admin():
+                    if st.session_state.user_role == "admin":
                         st.session_state.current_tab = "Backup & Restore"
                         
                         # Show backup notifications if any
@@ -4792,7 +4999,7 @@ class EquipmentManagementApp:
                         
                 elif st.session_state.current_page == "👥 User Management":
                     # User Management page (only for admin users)
-                    if self._is_admin():
+                    if st.session_state.user_role == "admin":
                         st.session_state.current_tab = "User Management"
                         
                         # Check if user needs password change first

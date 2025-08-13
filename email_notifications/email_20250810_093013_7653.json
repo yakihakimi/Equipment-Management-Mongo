@@ -1,0 +1,8 @@
+{
+  "timestamp": "2025-08-10T09:30:13.115442",
+  "from": "yakov.yosef.hakimi@altera.com",
+  "to": "yakov.yosef.hakimi@altera.com",
+  "subject": "HYBRID TEST from Altera Lab Equipment Management System",
+  "body": "\nHello Yakov,\n\nThis is a HYBRID test from the Equipment Management System.\n\nTest Details:\n- Sent via: BOTH real email AND file notification\n- Sent from: yakov.yosef.hakimi@altera.com\n- Sent to: yakov.yosef.hakimi@altera.com\n- Timestamp: 2025-08-10 09:30:11\n- Purpose: Ensure you get notifications even if email delivery has issues\n\nIf you see this in either your email OR the file notifications, the system is working!\n\nCheck:\n1. Your Altera email inbox (may take 15-30 minutes)\n2. Spam/junk folder\n3. Admin panel → Email Test tab for file notifications\n\nBest regards,\nEquipment Management System\n    ",
+  "status": "saved_to_file"
+}

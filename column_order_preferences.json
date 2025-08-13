@@ -1,9 +1,9 @@
 {
   "equipment": [
-    "Check Box",
     "ID",
     "Category",
     "Vendor",
+    "Location",
     "Model",
     "Serial",
     "Description",
@@ -14,9 +14,11 @@
     "Purchase Value",
     "Year of Purchase",
     "check",
-    "Location",
     "Comments",
-    "uuid"
+    "uuid",
+    "Modules",
+    "fff",
+    "bbb"
   ],
   "select_options": [
     "ID",
