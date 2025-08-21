@@ -26,26 +26,47 @@ class DatabaseBackupRestore:
     
     def setup_backup_folders(self):
         """Create backup folder structure organized by days of the week."""
-        self.base_backup_folder.mkdir(exist_ok=True)
-        
-        # Create folders for each day of the week (Sunday = 6, Monday = 0 in Python weekday())
-        # But we want Sunday first in our display order
-        self.day_folders = {
-            0: "monday",
-            1: "tuesday", 
-            2: "wednesday",
-            3: "thursday",
-            4: "friday",
-            5: "saturday",
-            6: "sunday"
-        }
-        
-        # Display order starting with Sunday
-        self.day_display_order = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]
-        
-        for day_name in self.day_folders.values():
-            day_folder = self.base_backup_folder / day_name
-            day_folder.mkdir(exist_ok=True)
+        try:
+            # Always use the project directory for backups
+            script_dir = Path(__file__).parent.absolute()
+            self.base_backup_folder = script_dir / "restore_data_to_db"
+            
+            # Create base folder with better error handling
+            try:
+                self.base_backup_folder.mkdir(exist_ok=True)
+                # print(f"Using backup folder: {self.base_backup_folder}")
+            except PermissionError as e:
+                print(f"Permission error creating backup folder {self.base_backup_folder}: {e}")
+                # Try to fix permissions or suggest running as administrator
+                print("Try running the application as administrator or check folder permissions")
+                raise
+            
+            # Create folders for each day of the week (Sunday = 6, Monday = 0 in Python weekday())
+            # But we want Sunday first in our display order
+            self.day_folders = {
+                0: "monday",
+                1: "tuesday", 
+                2: "wednesday",
+                3: "thursday",
+                4: "friday",
+                5: "saturday",
+                6: "sunday"
+            }
+            
+            # Display order starting with Sunday
+            self.day_display_order = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]
+            
+            for day_name in self.day_folders.values():
+                day_folder = self.base_backup_folder / day_name
+                try:
+                    day_folder.mkdir(exist_ok=True)
+                except PermissionError as e:
+                    print(f"Permission error creating folder {day_folder}: {e}")
+                    raise
+                    
+        except Exception as e:
+            print(f"Error setting up backup folders: {e}")
+            raise
     
     def connect_to_database(self):
         """Connect to MongoDB database."""
@@ -1268,21 +1289,35 @@ def backup_restore_ui(app_instance):
     with schedule_tab:
         st.subheader("Automatic Backup Scheduler")
         
-        st.info("💡 **Tip**: Call the automatic backup function periodically in your main application to maintain regular backups.")
+        st.info("💡 **Automatic backups now run every time an admin user accesses the application!**")
         
-        # Manual trigger for auto backup
-        auto_backup_interval = st.number_input(
-            "Auto Backup Interval (hours)",
-            min_value=0.5,
+        # Backup interval configuration
+        st.markdown("### ⚙️ Backup Configuration")
+        
+        # Get current interval from session state or use default
+        current_interval = st.session_state.get("backup_interval_hours", 1.0)
+        
+        backup_interval = st.number_input(
+            "Automatic Backup Interval (hours)",
+            min_value=0.01,
             max_value=24.0,
-            value=1.0,
-            step=0.5,
-            help="Interval for automatic backups"
+            value=current_interval,
+            step=0.1,
+            help="How often automatic backups should be created when admin users access the app"
         )
         
-        if st.button("🤖 Run Auto Backup Check"):
+        # Save the interval to session state
+        if backup_interval != current_interval:
+            st.session_state["backup_interval_hours"] = backup_interval
+            st.success(f"✅ Backup interval updated to {backup_interval} hours")
+        
+        # Manual trigger for auto backup
+        st.markdown("### 🔄 Manual Backup Check")
+        st.info("Click the button below to manually check if a backup is needed:")
+        
+        if st.button("🤖 Run Manual Backup Check"):
             with st.spinner("Checking if backup is needed..."):
-                backup_created, message = backup_system.automatic_backup_scheduler(auto_backup_interval)
+                backup_created, message = backup_system.automatic_backup_scheduler(backup_interval)
             
             if backup_created:
                 st.success(f"✅ {message}")
@@ -1299,6 +1334,194 @@ def backup_restore_ui(app_instance):
           - `select_options_backup_YYYYMMDD_HHMMSS.csv`
           - `backup_metadata_YYYYMMDD_HHMMSS.json`
         """)
+        
+        # Automatic backup information
+        st.markdown("### 🤖 Automatic Backup System")
+        st.markdown("""
+        - **When it runs**: Every time an admin user accesses the application
+        - **Interval check**: Only creates a backup if enough time has passed since the last one
+        - **Notifications**: You'll see a success message when automatic backups are created
+        - **Configuration**: Use the interval setting above to control backup frequency
+        - **No duplicates**: The system prevents creating multiple backups within the same interval
+        """)
+        
+        # Background scheduler section
+        st.markdown("### 🔄 Background Scheduler Setup")
+        st.info("💡 **Background Scheduler**: Set up automatic backups that run even when the web app is not being used!")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+             if st.button("📋 Create Background Scheduler Script", help="Creates a standalone script and automatically sets up Windows Task Scheduler"):
+                 with st.spinner("Creating background scheduler script and setting up Windows Task Scheduler..."):
+                     setup_info = setup_automatic_backup_scheduler(backup_interval, "backup_scheduler.log")
+                 
+                 if setup_info["script_created"]:
+                     st.success("✅ Background scheduler script created successfully!")
+                     st.info(f"📁 Script saved as: `{setup_info['script_path']}`")
+                     st.info(f"📝 Log file: `{setup_info['log_file']}`")
+                     
+                     # Show Windows Task Scheduler status
+                     if setup_info.get("task_scheduler_created"):
+                         st.success("✅ Windows Task Scheduler task created successfully!")
+                         st.info(f"🕐 Task runs every {backup_interval} hour(s)")
+                         st.info("🔧 Task name: 'Equipment_Backup_Scheduler'")
+                         st.info("💡 The backup system will now run automatically in the background!")
+                     else:
+                         st.warning("⚠️ Windows Task Scheduler task creation failed")
+                         if setup_info.get("task_scheduler_error"):
+                             st.error(f"Error: {setup_info['task_scheduler_error']}")
+                         st.info("📖 You can manually create the task using the instructions below")
+                 else:
+                     st.error(f"❌ Failed to create scheduler script: {setup_info.get('error', 'Unknown error')}")
+         
+        with col2:
+             if st.button("🧪 Test Background Backup", help="Test the background backup function manually"):
+                 with st.spinner("Testing background backup..."):
+                     backup_created, message = run_background_automatic_backup(backup_interval, "backup_scheduler.log")
+                 
+                 if backup_created:
+                     st.success(f"✅ {message}")
+                 else:
+                     st.info(f"ℹ️ {message}")
+         
+        # Additional buttons in separate columns to avoid nesting
+        col3, col4 = st.columns(2)
+         
+        with col3:
+            if st.button("🗑️ Delete Task", help="Delete the Windows Task Scheduler task", type="secondary"):
+                with st.spinner("Deleting Windows Task Scheduler task..."):
+                    task_deleted = delete_windows_task_scheduler_task()
+                
+                if task_deleted:
+                    st.success("✅ Windows Task Scheduler task deleted successfully!")
+                    st.rerun()  # Refresh the page to update status
+                else:
+                    st.error("❌ Failed to delete Windows Task Scheduler task")
+        
+        with col4:
+            if st.button("🧪 Test Execution", help="Test if the backup script can be executed by Task Scheduler"):
+                with st.spinner("Testing Windows Task Scheduler execution..."):
+                    test_result = test_windows_task_scheduler_execution()
+                
+                if test_result["test_result"] == "Success":
+                    st.success("✅ Script execution test successful!")
+                    if test_result.get("output"):
+                        with st.expander("📋 Test Output"):
+                            st.code(test_result["output"])
+                else:
+                    st.error(f"❌ Script execution test failed: {test_result.get('error', 'Unknown error')}")
+                    if test_result.get("output"):
+                        with st.expander("📋 Test Output"):
+                            st.code(test_result["output"])
+        
+        # Show setup instructions if script exists
+        if os.path.exists("backup_scheduler.py"):
+            with st.expander("📖 Background Scheduler Setup Instructions"):
+                st.markdown("### Linux/Mac (Cron Job)")
+                st.code("""
+# Add to crontab (crontab -e):
+# Run every hour
+0 * * * * /path/to/python /path/to/backup_scheduler.py
+
+# Or run every 30 minutes:
+# */30 * * * * /path/to/python /path/to/backup_scheduler.py
+                """, language="bash")
+                
+                st.markdown("### Windows (Task Scheduler)")
+                st.markdown("""
+1. Open Task Scheduler (`taskschd.msc`)
+2. Create Basic Task
+3. Name: `Equipment Backup Scheduler`
+4. Trigger: Daily, recur every 1 hour
+5. Action: Start a program
+6. Program: `python`
+7. Arguments: `backup_scheduler.py`
+8. Start in: Current directory
+                """)
+                
+                st.markdown("### Manual Test")
+                st.code("python backup_scheduler.py", language="bash")
+                
+                st.markdown("### View Logs")
+                st.code("tail -f backup_scheduler.log", language="bash")
+        
+        # Show background scheduler status
+        st.markdown("### 📊 Background Scheduler Status")
+        
+        # Check Windows Task Scheduler status
+        windows_task_status = check_windows_task_scheduler_status()
+        
+        # Show Windows Task Scheduler status
+        if windows_task_status["is_windows"]:
+            st.markdown("#### 🔧 Windows Task Scheduler Status")
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                if windows_task_status["task_exists"]:
+                    st.success("✅ Task Exists")
+                else:
+                    st.error("❌ Task Not Found")
+            
+            with col2:
+                st.metric("Task Name", windows_task_status["task_name"])
+            
+            with col3:
+                if windows_task_status["task_exists"]:
+                    status_color = "🟢" if windows_task_status["task_status"] == "Ready" else "🟡"
+                    st.metric("Status", f"{status_color} {windows_task_status['task_status']}")
+                else:
+                    st.metric("Status", "Not Found")
+            
+            # Show task details
+            if windows_task_status["task_exists"]:
+                st.info(f"📋 Task '{windows_task_status['task_name']}' is configured and ready to run automatically!")
+            else:
+                st.warning("⚠️ Windows Task Scheduler task not found. Click 'Create Background Scheduler Script' to set it up.")
+        
+        # Show log file status
+        scheduler_status = get_background_scheduler_status("backup_scheduler.log")
+        
+        if scheduler_status["log_file_exists"]:
+            st.markdown("#### 📝 Log File Status")
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric("Total Log Entries", scheduler_status["total_entries"])
+            
+            with col2:
+                st.metric("Successful Backups", scheduler_status["success_count"])
+            
+            with col3:
+                st.metric("Errors", scheduler_status["error_count"])
+            
+            with col4:
+                if scheduler_status["last_backup_time"]:
+                    time_ago = datetime.now() - scheduler_status["last_backup_time"]
+                    hours_ago = int(time_ago.total_seconds() / 3600)
+                    minutes_ago = int((time_ago.total_seconds() % 3600) / 60)
+                    
+                    if hours_ago > 0:
+                        last_backup_text = f"{hours_ago}h {minutes_ago}m ago"
+                    else:
+                        last_backup_text = f"{minutes_ago}m ago"
+                    
+                    st.metric("Last Background Backup", last_backup_text)
+                else:
+                    st.metric("Last Background Backup", "None")
+            
+            # Show recent log entries
+            if scheduler_status["recent_entries"]:
+                with st.expander("📋 Recent Background Scheduler Logs"):
+                    for entry in scheduler_status["recent_entries"][-10:]:  # Show last 10 entries
+                        if "ERROR" in entry:
+                            st.error(entry)
+                        elif "Backup created successfully" in entry:
+                            st.success(entry)
+                        else:
+                            st.info(entry)
+        else:
+            st.info("📝 No background scheduler log file found. Create a scheduler script first.")
         
         # Show current backup status
         current_backups = backup_system.get_available_backups()
@@ -1336,6 +1559,535 @@ def integrate_auto_backup_into_main_app(app_instance, backup_interval_hours=1):
         except Exception as e:
             # Silent error handling for automatic backups
             st.session_state["backup_error"] = f"Backup system error: {str(e)}"
+
+
+def run_automatic_backup_check(backup_interval_hours=None):
+    """
+    Standalone function to run automatic backup check that can be called from anywhere.
+    This function doesn't require an app instance and can be called independently.
+    
+    Args:
+        backup_interval_hours (int): Hours between automatic backups. If None, uses session state or default.
+    
+    Returns:
+        tuple: (backup_created, message)
+    """
+    try:
+        # Check if user is authenticated and is admin
+        if st.session_state.get("user_role") == "admin":
+            # Get backup interval from session state or use default
+            if backup_interval_hours is None:
+                backup_interval_hours = st.session_state.get("backup_interval_hours", 1)
+            
+            backup_system = DatabaseBackupRestore()
+            backup_created, message = backup_system.automatic_backup_scheduler(backup_interval_hours)
+            
+            # If backup was created, show a notification
+            if backup_created:
+                # Store notification in session state to show at the top of the page
+                st.session_state["backup_notification"] = f"✅ Automatic backup created: {message}"
+                # Also show a temporary success message
+                st.success(f"✅ Automatic backup created: {message}")
+            
+            return backup_created, message
+        else:
+            return False, "User not authenticated or not admin"
+    except Exception as e:
+        error_msg = f"Backup system error: {str(e)}"
+        st.session_state["backup_error"] = error_msg
+        return False, error_msg
+
+
+def run_background_automatic_backup(backup_interval_hours=1, log_file=None):
+    """
+    Background automatic backup function that can run independently of web access.
+    This function can be called by a scheduler, cron job, or background process.
+    
+    Args:
+        backup_interval_hours (int): Hours between automatic backups
+        log_file (str): Optional log file path to write backup status
+    
+    Returns:
+        tuple: (backup_created, message)
+    """
+    try:
+        # Create backup system instance
+        backup_system = DatabaseBackupRestore()
+        
+        # Run automatic backup check
+        backup_created, message = backup_system.automatic_backup_scheduler(backup_interval_hours)
+        
+        # Log the result if log file is provided
+        if log_file:
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            log_entry = f"[{timestamp}] Backup check: {message}\n"
+            try:
+                with open(log_file, 'a', encoding='utf-8') as f:
+                    f.write(log_entry)
+            except Exception as log_error:
+                print(f"Failed to write to log file: {log_error}")
+        
+        # Also print to console for immediate feedback
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}")
+        
+        return backup_created, message
+        
+    except Exception as e:
+        error_msg = f"Background backup system error: {str(e)}"
+        
+        # Log the error if log file is provided
+        if log_file:
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            log_entry = f"[{timestamp}] ERROR: {error_msg}\n"
+            try:
+                with open(log_file, 'a', encoding='utf-8') as f:
+                    f.write(log_entry)
+            except Exception as log_error:
+                print(f"Failed to write error to log file: {log_error}")
+        
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] ERROR: {error_msg}")
+        return False, error_msg
+
+
+def create_backup_scheduler_script(backup_interval_hours=1, log_file="backup_scheduler.log"):
+    """
+    Create a standalone Python script that can be run by a scheduler or cron job.
+    
+    Args:
+        backup_interval_hours (int): Hours between automatic backups
+        log_file (str): Log file path for backup status
+    
+    Returns:
+        str: Path to the created scheduler script
+    """
+    script_content = f'''#!/usr/bin/env python3
+"""
+Automatic Backup Scheduler Script
+This script runs automatic backups at specified intervals.
+Can be executed by cron job, Windows Task Scheduler, or any other scheduler.
+
+Usage:
+    python backup_scheduler.py
+
+To set up as a cron job (Linux/Mac):
+    # Run every hour
+    0 * * * * /path/to/python /path/to/backup_scheduler.py
+    
+    # Run every 30 minutes
+    */30 * * * * /path/to/python /path/to/backup_scheduler.py
+
+To set up as Windows Task Scheduler:
+    1. Open Task Scheduler
+    2. Create Basic Task
+    3. Set trigger (e.g., every 1 hour)
+    4. Action: Start a program
+    5. Program: python
+    6. Arguments: backup_scheduler.py
+"""
+
+import sys
+import os
+
+# Add the current directory to Python path so we can import our modules
+current_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, current_dir)
+
+from backup_csv_for_db_restore import run_background_automatic_backup
+from datetime import datetime
+
+if __name__ == "__main__":
+    print(f"[{{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}}] Starting automatic backup check...")
+    
+    # Run the background backup
+    backup_created, message = run_background_automatic_backup(
+        backup_interval_hours={backup_interval_hours},
+        log_file="{log_file}"
+    )
+    
+    if backup_created:
+        print(f"[{{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}}] ✅ Backup created successfully!")
+    else:
+        print(f"[{{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}}] ℹ️ {{message}}")
+    
+    print(f"[{{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}}] Backup check completed.")
+'''
+    
+    # Create the scheduler script file
+    script_path = "backup_scheduler.py"
+    try:
+        with open(script_path, 'w', encoding='utf-8') as f:
+            f.write(script_content)
+        
+        # Make the script executable on Unix-like systems
+        try:
+            import stat
+            os.chmod(script_path, stat.S_IRWXU | stat.S_IRGRP | stat.S_IROTH)
+        except:
+            pass  # Windows doesn't have chmod
+        
+        return script_path
+    except Exception as e:
+        print(f"Failed to create scheduler script: {e}")
+        return None
+
+
+def setup_automatic_backup_scheduler(backup_interval_hours=1, log_file="backup_scheduler.log"):
+    """
+    Set up automatic backup scheduler by creating the necessary script and automatically registering with Windows Task Scheduler.
+    
+    Args:
+        backup_interval_hours (int): Hours between automatic backups
+        log_file (str): Log file path for backup status
+    
+    Returns:
+        dict: Setup information and instructions
+    """
+    # Create the scheduler script
+    script_path = create_backup_scheduler_script(backup_interval_hours, log_file)
+    
+    if script_path:
+        setup_info = {
+            "script_created": True,
+            "script_path": script_path,
+            "backup_interval_hours": backup_interval_hours,
+            "log_file": log_file,
+            "task_scheduler_created": False,
+            "task_scheduler_error": None
+        }
+        
+        # Try to automatically create Windows Task Scheduler task
+        try:
+            task_created = create_windows_task_scheduler_task(script_path, backup_interval_hours)
+            setup_info["task_scheduler_created"] = task_created
+            if not task_created:
+                setup_info["task_scheduler_error"] = "Failed to create Windows Task Scheduler task"
+        except Exception as e:
+            setup_info["task_scheduler_created"] = False
+            setup_info["task_scheduler_error"] = str(e)
+        
+        # Add manual instructions as fallback
+        setup_info["instructions"] = {
+            "linux_mac_cron": f"""
+# Add to crontab (crontab -e):
+# Run every {backup_interval_hours} hour(s)
+0 */{backup_interval_hours} * * * /path/to/python {os.path.abspath(script_path)}
+
+# Or run every 30 minutes:
+# */30 * * * * /path/to/python {os.path.abspath(script_path)}
+            """,
+            "windows_task_scheduler": f"""
+# Windows Task Scheduler Setup (Manual):
+# 1. Open Task Scheduler (taskschd.msc)
+# 2. Create Basic Task
+# 3. Name: Equipment Backup Scheduler
+# 4. Trigger: Daily, recur every {backup_interval_hours} hour(s)
+# 5. Action: Start a program
+# 6. Program: python
+# 7. Arguments: {os.path.abspath(script_path)}
+# 8. Start in: {os.path.dirname(os.path.abspath(script_path))}
+            """,
+            "manual_test": f"""
+# Test the scheduler manually:
+python {script_path}
+            """
+        }
+    else:
+        setup_info = {
+            "script_created": False,
+            "error": "Failed to create scheduler script"
+        }
+    
+    return setup_info
+
+
+def create_windows_task_scheduler_task(script_path, backup_interval_hours=1):
+    """
+    Automatically create a Windows Task Scheduler task for the backup script.
+    
+    Args:
+        script_path (str): Path to the backup scheduler script
+        backup_interval_hours (int): Hours between backups
+    
+    Returns:
+        bool: True if task was created successfully, False otherwise
+    """
+    try:
+        import subprocess
+        import platform
+        import sys
+        
+        # Check if we're on Windows
+        if platform.system() != "Windows":
+            return False
+        
+        # Get absolute paths
+        script_abs_path = os.path.abspath(script_path)
+        script_dir = os.path.dirname(script_abs_path)
+        
+        # Task name
+        task_name = "Equipment_Backup_Scheduler"
+        
+        # Delete existing task if it exists
+        try:
+            subprocess.run(["schtasks", "/delete", "/tn", task_name, "/f"], 
+                         capture_output=True, check=False)
+        except:
+            pass  # Ignore errors if task doesn't exist
+        
+        # Calculate interval in minutes
+        interval_minutes = int(backup_interval_hours * 60)
+        
+        # Create the task using schtasks command
+        # Format: schtasks /create /tn "TaskName" /tr "Command" /sc minute /mo interval /st start_time
+        # Use full path to python and script for better compatibility
+        python_path = sys.executable  # Get the current Python executable path
+        cmd = [
+            "schtasks", "/create", "/tn", task_name,
+            "/tr", f"\"{python_path}\" \"{script_abs_path}\"",
+            "/sc", "minute",
+            "/mo", str(interval_minutes),
+            "/st", "00:00",
+            "/f"  # Force creation (overwrite if exists)
+        ]
+        
+        # Execute the command
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        
+        # Check if task was created successfully
+        if result.returncode == 0:
+            print(f"✅ Windows Task Scheduler task '{task_name}' created successfully!")
+            print(f"   - Runs every {backup_interval_hours} hour(s) ({interval_minutes} minutes)")
+            print(f"   - Script: {script_abs_path}")
+            return True
+        else:
+            print(f"❌ Failed to create Windows Task Scheduler task: {result.stderr}")
+            return False
+            
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Error creating Windows Task Scheduler task: {e}")
+        print(f"   Error output: {e.stderr}")
+        return False
+    except Exception as e:
+        print(f"❌ Unexpected error creating Windows Task Scheduler task: {e}")
+        return False
+
+
+def delete_windows_task_scheduler_task():
+    """
+    Delete the Windows Task Scheduler task for the backup system.
+    
+    Returns:
+        bool: True if task was deleted successfully, False otherwise
+    """
+    try:
+        import subprocess
+        import platform
+        
+        # Check if we're on Windows
+        if platform.system() != "Windows":
+            return False
+        
+        task_name = "Equipment_Backup_Scheduler"
+        
+        # Delete the task
+        cmd = ["schtasks", "/delete", "/tn", task_name, "/f"]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        
+        if result.returncode == 0:
+            print(f"✅ Windows Task Scheduler task '{task_name}' deleted successfully!")
+            return True
+        else:
+            print(f"❌ Failed to delete Windows Task Scheduler task: {result.stderr}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Error deleting Windows Task Scheduler task: {e}")
+        return False
+
+
+def check_windows_task_scheduler_status():
+    """
+    Check if the Windows Task Scheduler task exists and get its status.
+    
+    Returns:
+        dict: Status information about the Windows Task Scheduler task
+    """
+    try:
+        import subprocess
+        import platform
+        
+        # Check if we're on Windows
+        if platform.system() != "Windows":
+            return {
+                "is_windows": False,
+                "task_exists": False,
+                "task_status": "Not available on this platform"
+            }
+        
+        task_name = "Equipment_Backup_Scheduler"
+        
+        # Query the task status
+        cmd = ["schtasks", "/query", "/tn", task_name, "/fo", "csv"]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        
+        if result.returncode == 0:
+            # Task exists, parse the output
+            lines = result.stdout.strip().split('\n')
+            if len(lines) > 1:  # Has header and data
+                # Parse CSV output to get status
+                status_line = lines[1]  # First data line
+                status_parts = status_line.split(',')
+                if len(status_parts) >= 3:
+                    task_status = status_parts[2].strip('"')  # Status is usually in 3rd column
+                else:
+                    task_status = "Unknown"
+                
+                return {
+                    "is_windows": True,
+                    "task_exists": True,
+                    "task_name": task_name,
+                    "task_status": task_status,
+                    "last_run": "Available in Task Scheduler",
+                    "next_run": "Available in Task Scheduler"
+                }
+        
+        # Task doesn't exist or query failed
+        return {
+            "is_windows": True,
+            "task_exists": False,
+            "task_name": task_name,
+            "task_status": "Not found",
+            "error": result.stderr if result.stderr else "Task not found"
+        }
+        
+    except Exception as e:
+        return {
+            "is_windows": True,
+            "task_exists": False,
+            "task_status": "Error checking status",
+            "error": str(e)
+        }
+
+
+def test_windows_task_scheduler_execution():
+    """
+    Test function to verify that the Windows Task Scheduler can execute the backup script.
+    
+    Returns:
+        dict: Test results
+    """
+    try:
+        import subprocess
+        import platform
+        
+        # Check if we're on Windows
+        if platform.system() != "Windows":
+            return {
+                "is_windows": False,
+                "test_result": "Not available on this platform"
+            }
+        
+        # Test if the backup script can be executed
+        script_path = os.path.abspath("backup_scheduler.py")
+        python_path = sys.executable
+        
+        # Run the script with a very short interval to force a backup
+        cmd = [python_path, script_path]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=30)
+        
+        if result.returncode == 0:
+            return {
+                "is_windows": True,
+                "test_result": "Success",
+                "output": result.stdout,
+                "error": result.stderr if result.stderr else None
+            }
+        else:
+            return {
+                "is_windows": True,
+                "test_result": "Failed",
+                "output": result.stdout,
+                "error": result.stderr,
+                "return_code": result.returncode
+            }
+            
+    except subprocess.TimeoutExpired:
+        return {
+            "is_windows": True,
+            "test_result": "Timeout",
+            "error": "Script execution timed out after 30 seconds"
+        }
+    except Exception as e:
+        return {
+            "is_windows": True,
+            "test_result": "Error",
+            "error": str(e)
+        }
+
+
+def get_background_scheduler_status(log_file="backup_scheduler.log"):
+    """
+    Get the status of the background scheduler by reading the log file.
+    
+    Args:
+        log_file (str): Log file path
+    
+    Returns:
+        dict: Status information including recent log entries
+    """
+    status = {
+        "log_file_exists": False,
+        "log_file_path": log_file,
+        "recent_entries": [],
+        "last_backup_time": None,
+        "total_entries": 0,
+        "error_count": 0,
+        "success_count": 0
+    }
+    
+    try:
+        if os.path.exists(log_file):
+            status["log_file_exists"] = True
+            
+            # Read the last 20 lines of the log file
+            with open(log_file, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+                status["total_entries"] = len(lines)
+                
+                # Get recent entries (last 20)
+                recent_lines = lines[-20:] if len(lines) > 20 else lines
+                status["recent_entries"] = [line.strip() for line in recent_lines if line.strip()]
+                
+                # Count successes and errors
+                for line in lines:
+                    if "ERROR" in line:
+                        status["error_count"] += 1
+                    elif "Backup created successfully" in line:
+                        status["success_count"] += 1
+                
+                # Find the last backup time
+                for line in reversed(lines):
+                    if "Backup created successfully" in line:
+                        # Extract timestamp from log entry
+                        import re
+                        timestamp_match = re.search(r'\[(.*?)\]', line)
+                        if timestamp_match:
+                            try:
+                                status["last_backup_time"] = datetime.strptime(
+                                    timestamp_match.group(1), 
+                                    "%Y-%m-%d %H:%M:%S"
+                                )
+                                break
+                            except:
+                                pass
+                
+    except Exception as e:
+        status["error"] = f"Failed to read log file: {str(e)}"
+    
+    return status
 
 
 if __name__ == "__main__":

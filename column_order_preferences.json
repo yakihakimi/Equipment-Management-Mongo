@@ -15,10 +15,8 @@
     "Year of Purchase",
     "check",
     "Comments",
-    "uuid",
     "Modules",
-    "fff",
-    "bbb"
+    "uuid"
   ],
   "select_options": [
     "ID",

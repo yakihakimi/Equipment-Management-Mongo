@@ -1,0 +1,119 @@
+/* Ultra-Aggressive Anti-Fading CSS for Maximum Speed */
+
+/* CRITICAL: Force ALL elements to stay visible */
+* {
+    transition: none !important;
+    animation: none !important;
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+    transition-duration: 0s !important;
+    transition-delay: 0s !important;
+    opacity: 1 !important;
+    background-color: #ffffff !important;
+}
+
+/* Force Streamlit app container */
+.stApp {
+    background-color: #ffffff !important;
+    background-image: none !important;
+    opacity: 1 !important;
+    transition: none !important;
+    animation: none !important;
+}
+
+/* Force main container */
+.main .block-container {
+    background-color: #ffffff !important;
+    background-image: none !important;
+    transition: none !important;
+    opacity: 1 !important;
+    animation: none !important;
+}
+
+/* Force ALL divs */
+.stApp > div,
+.main > div,
+.block-container > div,
+[data-testid="stAppViewContainer"] > div,
+[data-testid="stDecoration"] > div,
+div {
+    background-color: #ffffff !important;
+    opacity: 1 !important;
+    transition: none !important;
+    animation: none !important;
+}
+
+/* Force ALL Streamlit elements */
+.stButton,
+.stSelectbox,
+.stTextInput,
+.stTextArea,
+.stDataFrame,
+.stForm,
+.stCheckbox,
+.stRadio,
+.stMarkdown,
+.stCode,
+.stText {
+    background-color: #ffffff !important;
+    opacity: 1 !important;
+    transition: none !important;
+    animation: none !important;
+}
+
+/* Force ALL Streamlit elements and their children */
+.stButton *,
+.stSelectbox *,
+.stTextInput *,
+.stTextArea *,
+.stDataFrame *,
+.stForm *,
+.stCheckbox *,
+.stRadio *,
+.stMarkdown *,
+.stCode *,
+.stText * {
+    background-color: #ffffff !important;
+    opacity: 1 !important;
+    transition: none !important;
+    animation: none !important;
+}
+
+/* Force ALL elements in Streamlit app */
+.stApp * {
+    background-color: #ffffff !important;
+    opacity: 1 !important;
+    transition: none !important;
+    animation: none !important;
+}
+
+/* Prevent any loading states */
+[data-testid="stDecoration"]::before,
+[data-testid="stDecoration"]::after,
+.stApp > div::before,
+.stApp > div::after {
+    display: none !important;
+    opacity: 0 !important;
+}
+
+/* Force all text to stay visible */
+* {
+    color: inherit !important;
+    opacity: 1 !important;
+}
+
+/* Override any existing animations */
+@keyframes none {
+    from { opacity: 1; background-color: #ffffff; }
+    to { opacity: 1; background-color: #ffffff; }
+}
+
+/* Force all elements to maintain appearance */
+* {
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+    transition-duration: 0s !important;
+    transition-delay: 0s !important;
+    opacity: 1 !important;
+    background-color: #ffffff !important;
+}

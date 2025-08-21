@@ -9,15 +9,15 @@
     "ETAG",
     "Last Cal Date",
     "Next Cal Date",
-    "IP Address",
     "Purchase Value",
     "Year of Purchase",
+    "Modules",
     "Comments",
-    "Modules"
+    "IP Address"
   ],
   "select_options_filters": [
+    "Category",
     "Location",
-    "Vendor",
-    "Category"
+    "Vendor"
   ]
 }

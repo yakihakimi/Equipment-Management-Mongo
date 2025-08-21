@@ -68,14 +68,19 @@ class AuthenticationManager:
             login_title (str): Title to display on login page
             mongo_connection_string (str): MongoDB connection string
         """
+        # Initialize cookie controller with error handling to avoid session state conflicts
+        try:
+            self.cookie_controller = CookieController()
+        except Exception as e:
+            # st.warning(f"⚠️ Cookie controller initialization failed: {str(e)}")
+            # st.info("Session persistence may be limited. Continuing without cookie controller.")
+            self.cookie_controller = None
+        
         self.login_title = login_title
         self.mongo_connection_string = mongo_connection_string
         
         # Initialize MongoDB connection
         self._connect_to_database()
-        
-        # Initialize cookie controller for persistent sessions
-        self.cookie_controller = CookieController()
         
         # Session storage file
         self.sessions_file = Path("sessions_storage.json")
@@ -1314,6 +1319,10 @@ class AuthenticationManager:
     def set_cookie(self, cookie_name, value):
         """Set cookie with better error handling and verification."""
         try:
+            if not self.cookie_controller:
+                st.warning("⚠️ Cookie controller not available. Using session state only.")
+                return True  # Return True to continue without cookies
+            
             expires = datetime.now() + timedelta(minutes=480)
             self.cookie_controller.set(cookie_name, value, path="/", same_site="Lax", expires=expires)
             time.sleep(0.1)
@@ -1369,6 +1378,13 @@ class AuthenticationManager:
     def load_session(self):
         """Load session from cookies."""
         try:
+            if not self.cookie_controller:
+                # If cookie controller is not available, try to load from session state only
+                if hasattr(st.session_state, 'session_id') and st.session_state.session_id:
+                    # Session already loaded in session state
+                    return True
+                return False
+            
             session_token = self.cookie_controller.get("session_token")
             if session_token:
                 # First reload sessions from file to get latest state
@@ -1418,7 +1434,8 @@ class AuthenticationManager:
                 else:
                     # No session found but we have a cookie - clean up the orphaned cookie
                     try:
-                        self.cookie_controller.remove("session_token")
+                        if self.cookie_controller:
+                            self.cookie_controller.remove("session_token")
                     except:
                         pass
             return False
@@ -1466,7 +1483,8 @@ class AuthenticationManager:
             
             # Remove cookie
             try:
-                self.cookie_controller.remove("session_token")
+                if self.cookie_controller:
+                    self.cookie_controller.remove("session_token")
             except:
                 pass
         except Exception as e:
@@ -1780,6 +1798,7 @@ class AuthenticationManager:
         for key in keys_to_remove:
             del st.session_state[key]
         
+        # Force rerun to redirect to login page
         st.rerun()
     
     def _check_session_validity(self):
@@ -1803,13 +1822,27 @@ class AuthenticationManager:
             session_duration = time.time() - login_time
             # Session expires after 24 hours (86400 seconds)
             if session_duration > 86400:
-                self.logout()
+                # Clear session and force rerun
+                st.session_state.authenticated = False
+                st.session_state.username = None
+                st.session_state.user_role = None
+                st.session_state.login_time = None
+                st.session_state.session_id = None
+                st.session_state.session_persistent = False
+                st.rerun()
                 return False
         
         # Verify user still exists in system
         user_info = self.get_user_info(username)
         if not user_info:
-            self.logout()
+            # Clear session and force rerun
+            st.session_state.authenticated = False
+            st.session_state.username = None
+            st.session_state.user_role = None
+            st.session_state.login_time = None
+            st.session_state.session_id = None
+            st.session_state.session_persistent = False
+            st.rerun()
             return False
         
         return True

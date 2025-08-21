@@ -1,0 +1,374 @@
+/* Efficient Anti-Fading CSS for Streamlit Applications */
+
+/* Prevent all transitions and animations globally */
+* {
+    transition: none !important;
+    animation: none !important;
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+    transition-duration: 0s !important;
+    transition-delay: 0s !important;
+}
+
+/* Force consistent background during all states */
+.stApp {
+    background-color: #ffffff !important;
+    background-image: none !important;
+    opacity: 1 !important;
+}
+
+.main .block-container {
+    background-color: #ffffff !important;
+    background-image: none !important;
+    transition: none !important;
+    opacity: 1 !important;
+}
+
+/* Target Streamlit's loading and decoration elements */
+.stApp > div[data-testid="stDecoration"] {
+    background-color: #ffffff !important;
+    background-image: none !important;
+    opacity: 1 !important;
+}
+
+/* Prevent opacity changes during loading */
+.stApp > div,
+.main > div,
+.block-container > div {
+    opacity: 1 !important;
+    background-color: #ffffff !important;
+    transition: none !important;
+}
+
+/* Override any Streamlit loading states */
+[data-testid="stAppViewContainer"] {
+    background-color: #ffffff !important;
+    opacity: 1 !important;
+    transition: none !important;
+}
+
+/* Prevent any fade effects from Streamlit's internal CSS */
+.stApp > div[data-testid="stDecoration"]::before,
+.stApp > div[data-testid="stDecoration"]::after,
+.stApp > div::before,
+.stApp > div::after {
+    display: none !important;
+}
+
+/* Force all elements to maintain their appearance */
+.stApp * {
+    transition: none !important;
+    animation: none !important;
+}
+
+/* Specific fixes for AgGrid and dataframe interactions */
+.ag-root-wrapper,
+.ag-root,
+.ag-body-viewport,
+.ag-body-viewport-wrapper,
+.ag-theme-streamlit {
+    background-color: #ffffff !important;
+    transition: none !important;
+    opacity: 1 !important;
+}
+
+/* Force all interactive elements to maintain appearance */
+.stButton > button,
+.stSelectbox > div,
+.stTextInput > div,
+.stTextArea > div,
+.stCheckbox > div,
+.stRadio > div {
+    transition: none !important;
+    animation: none !important;
+    opacity: 1 !important;
+}
+
+/* Prevent any hover effects that might cause fading */
+.stButton > button:hover,
+.stSelectbox > div:hover,
+.stTextInput > div:hover,
+.stTextArea > div:hover,
+.stCheckbox > div:hover,
+.stRadio > div:hover {
+    background-color: inherit !important;
+    transition: none !important;
+    opacity: 1 !important;
+}
+
+/* Fix for form elements */
+.stForm {
+    background-color: transparent !important;
+    transition: none !important;
+    opacity: 1 !important;
+}
+
+/* Fix for sidebar */
+.sidebar .sidebar-content {
+    background-color: #ffffff !important;
+    transition: none !important;
+    opacity: 1 !important;
+}
+
+/* Fix for any loading spinners or overlays */
+.stSpinner,
+.stProgress {
+    background-color: transparent !important;
+    transition: none !important;
+}
+
+/* Ensure all text remains visible */
+.stMarkdown,
+.stText,
+.stCode {
+    color: inherit !important;
+    opacity: 1 !important;
+    transition: none !important;
+}
+
+/* Fix for any modal or popup elements */
+.stModal,
+.stPopup {
+    background-color: #ffffff !important;
+    opacity: 1 !important;
+    transition: none !important;
+}
+
+/* Specific fixes for page navigation and rerun effects */
+.stApp > div[data-testid="stDecoration"] {
+    background-color: #ffffff !important;
+    opacity: 1 !important;
+    transition: none !important;
+}
+
+/* Fix for any loading overlays that might appear during navigation */
+.stApp > div[data-testid="stDecoration"]::before,
+.stApp > div[data-testid="stDecoration"]::after {
+    display: none !important;
+}
+
+/* Ensure consistent styling during all interactions */
+.stApp > div,
+.main > div,
+.block-container > div,
+[data-testid="stAppViewContainer"] > div {
+    opacity: 1 !important;
+    background-color: #ffffff !important;
+    transition: none !important;
+}
+
+/* Prevent any Streamlit internal animations */
+.stApp * {
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+    transition-duration: 0s !important;
+    transition-delay: 0s !important;
+}
+
+/* Specific fixes for navigation elements that cause fading */
+.stSelectbox > div > div > div > div {
+    background-color: #f0f2f6 !important;
+    transition: none !important;
+    opacity: 1 !important;
+}
+
+/* Fix for dataframe interactions */
+.stDataFrame {
+    background-color: #ffffff !important;
+    transition: none !important;
+    opacity: 1 !important;
+}
+
+/* Fix for any Streamlit internal loading states */
+.stApp > div[data-testid="stDecoration"] {
+    background-color: #ffffff !important;
+    opacity: 1 !important;
+    transition: none !important;
+}
+
+/* Prevent any CSS animations or transitions */
+@keyframes none {
+    from { opacity: 1; }
+    to { opacity: 1; }
+}
+
+/* Additional fixes for specific Streamlit components that cause fading */
+.stApp > div[data-testid="stDecoration"] {
+    background-color: #ffffff !important;
+    opacity: 1 !important;
+    transition: none !important;
+}
+
+/* Fix for any loading overlays that might appear during navigation */
+.stApp > div[data-testid="stDecoration"]::before,
+.stApp > div[data-testid="stDecoration"]::after {
+    display: none !important;
+}
+
+/* Ensure consistent styling during all interactions */
+.stApp > div,
+.main > div,
+.block-container > div,
+[data-testid="stAppViewContainer"] > div {
+    opacity: 1 !important;
+    background-color: #ffffff !important;
+    transition: none !important;
+}
+
+/* Prevent any Streamlit internal animations */
+.stApp * {
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+    transition-duration: 0s !important;
+    transition-delay: 0s !important;
+}
+
+/* Target specific elements that cause fading during navigation */
+.stSelectbox > div > div > div > div {
+    background-color: #f0f2f6 !important;
+    transition: none !important;
+    opacity: 1 !important;
+}
+
+/* Fix for dataframe interactions */
+.stDataFrame {
+    background-color: #ffffff !important;
+    transition: none !important;
+    opacity: 1 !important;
+}
+
+/* Additional specific fixes for navigation elements */
+.stSelectbox,
+.stSelectbox > div,
+.stSelectbox > div > div,
+.stSelectbox > div > div > div {
+    background-color: #ffffff !important;
+    transition: none !important;
+    opacity: 1 !important;
+}
+
+/* Fix for any Streamlit internal loading states */
+.stApp > div[data-testid="stDecoration"] {
+    background-color: #ffffff !important;
+    opacity: 1 !important;
+    transition: none !important;
+}
+
+/* Prevent any loading overlays */
+.stApp > div[data-testid="stDecoration"]::before,
+.stApp > div[data-testid="stDecoration"]::after {
+    display: none !important;
+}
+
+/* Ensure all navigation elements maintain appearance */
+.stSelectbox *,
+.stButton *,
+.stTextInput *,
+.stTextArea * {
+    transition: none !important;
+    animation: none !important;
+    opacity: 1 !important;
+}
+
+/* CRITICAL: Prevent fading during rerun operations */
+/* Target the specific elements that fade during rerun */
+.stApp > div[data-testid="stDecoration"] {
+    background-color: #ffffff !important;
+    opacity: 1 !important;
+    transition: none !important;
+    animation: none !important;
+}
+
+/* Prevent any loading states during rerun */
+.stApp > div[data-testid="stDecoration"]::before,
+.stApp > div[data-testid="stDecoration"]::after {
+    display: none !important;
+    opacity: 0 !important;
+}
+
+/* Force all elements to stay visible during rerun */
+.stApp > div,
+.main > div,
+.block-container > div,
+[data-testid="stAppViewContainer"] > div {
+    opacity: 1 !important;
+    background-color: #ffffff !important;
+    transition: none !important;
+    animation: none !important;
+}
+
+/* Prevent any Streamlit internal loading animations */
+.stApp * {
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+    transition-duration: 0s !important;
+    transition-delay: 0s !important;
+}
+
+/* Specific fix for rerun loading states */
+.stApp > div[data-testid="stDecoration"] {
+    background-color: #ffffff !important;
+    opacity: 1 !important;
+    transition: none !important;
+    animation: none !important;
+}
+
+/* Prevent any loading overlays during rerun */
+.stApp > div[data-testid="stDecoration"]::before,
+.stApp > div[data-testid="stDecoration"]::after {
+    display: none !important;
+    opacity: 0 !important;
+}
+
+/* Force all elements to stay visible during rerun */
+.stApp > div,
+.main > div,
+.block-container > div,
+[data-testid="stAppViewContainer"] > div {
+    opacity: 1 !important;
+    background-color: #ffffff !important;
+    transition: none !important;
+    animation: none !important;
+}
+
+/* Prevent any Streamlit internal loading animations */
+.stApp * {
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+    transition-duration: 0s !important;
+    transition-delay: 0s !important;
+}
+
+/* Additional specific fixes for rerun operations */
+.stApp > div[data-testid="stDecoration"] {
+    background-color: #ffffff !important;
+    opacity: 1 !important;
+    transition: none !important;
+    animation: none !important;
+}
+
+/* Prevent any loading overlays during rerun */
+.stApp > div[data-testid="stDecoration"]::before,
+.stApp > div[data-testid="stDecoration"]::after {
+    display: none !important;
+    opacity: 0 !important;
+}
+
+/* Force all elements to stay visible during rerun */
+.stApp > div,
+.main > div,
+.block-container > div,
+[data-testid="stAppViewContainer"] > div {
+    opacity: 1 !important;
+    background-color: #ffffff !important;
+    transition: none !important;
+    animation: none !important;
+}
+
+/* Prevent any Streamlit internal loading animations */
+.stApp * {
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+    transition-duration: 0s !important;
+    transition-delay: 0s !important;
+}

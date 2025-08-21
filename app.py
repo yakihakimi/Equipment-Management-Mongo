@@ -1,4 +1,3 @@
-
 import streamlit as st
 from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, DataReturnMode, JsCode
 import pandas as pd
@@ -16,369 +15,478 @@ import sys
 # Import authentication functionality
 from login_and_signup import AuthenticationManager
 
+# Import general utility functions
+from general_functions import is_admin, apply_column_order, load_column_order, save_column_order, save_filter_order
+
+# Import Equipment Select Options functionality
+try:
+    from Equipment_Select_Options_Page import EquipmentSelectOptionsSystem
+except ImportError:
+    st.warning("⚠️ Equipment Select Options system not available. Please ensure Equipment_Select_Options_Page.py is accessible.")
+    EquipmentSelectOptionsSystem = None
+
 # Import backup and restore functionality
 try:
-    from backup_csv_for_db_restore import backup_restore_ui, integrate_auto_backup_into_main_app
+    from backup_csv_for_db_restore import backup_restore_ui, integrate_auto_backup_into_main_app, run_automatic_backup_check
 except ImportError:
     st.warning("⚠️ Backup system not available. Please ensure backup_csv_for_db_restore.py is in the same directory.")
     backup_restore_ui = None
     integrate_auto_backup_into_main_app = None
+    run_automatic_backup_check = None
 
-class EquipmentManagementApp:
-    def add_column_to_db(self, col_name, default_value=None):
-        """
-        Add a new column to all records in the Equipment collection and update the DataFrame.
-        Args:
-            col_name (str): Name of the new column
-            default_value: Default value for the new column (optional)
-        Returns:
-            int: Number of records updated
-        """
-        update_result = self.Equipment_collection.update_many(
-            {},
-            {"$set": {col_name: default_value}}
-        )
-        # Also update the DataFrame in memory
-        if col_name not in self.df.columns:
-            self.df[col_name] = default_value
-            # Apply saved column order for equipment table
-            self.df = self._apply_column_order(self.df, 'equipment')
-        
-        # Check if this column exists in Equipment Select Options and sync dropdown values
-        self._sync_equipment_column_with_select_options(col_name)
-        
-        return update_result.modified_count
-    
-    def delete_column_from_db(self, col_name):
-        """
-        Delete a column from all records in the Equipment collection and update the DataFrame.
-        Args:
-            col_name (str): Name of the column to delete
-        Returns:
-            int: Number of records updated
-        """
-        update_result = self.Equipment_collection.update_many(
-            {},
-            {"$unset": {col_name: ""}}
-        )
-        # Also update the DataFrame in memory
-        if col_name in self.df.columns:
-            self.df = self.df.drop(columns=[col_name])
-        return update_result.modified_count
-    
-    def _save_column_order(self, table_type, column_order):
-        """
-        Save column order preference for a specific table type.
-        Args:
-            table_type (str): 'equipment' or 'select_options'
-            column_order (list): List of column names in preferred order
-        """
-        try:
-            # Save to a JSON file for persistence
-            column_order_file = Path("column_order_preferences.json")
-            
-            # Load existing preferences if file exists
-            preferences = {}
-            if column_order_file.exists():
-                try:
-                    with open(column_order_file, 'r') as f:
-                        preferences = json.load(f)
-                except:
-                    preferences = {}
-            
-            # Update preferences for this table type
-            preferences[table_type] = column_order
-            
-            # Save back to file
-            with open(column_order_file, 'w') as f:
-                json.dump(preferences, f, indent=2)
-            
-            return True
-        except Exception as e:
-            st.error(f"Error saving column order: {str(e)}")
-            return False
-    
-    def _load_column_order(self, table_type, default_columns):
-        """
-        Load saved column order preference for a specific table type.
-        Args:
-            table_type (str): 'equipment' or 'select_options'
-            default_columns (list): Default column order to use if no saved preference
-        Returns:
-            list: Ordered list of column names
-        """
-        try:
-            column_order_file = Path("column_order_preferences.json")
-            
-            if column_order_file.exists():
-                with open(column_order_file, 'r') as f:
-                    preferences = json.load(f)
-                
-                if table_type in preferences:
-                    saved_order = preferences[table_type]
-                    # Ensure all current columns are included (in case new columns were added)
-                    missing_columns = [col for col in default_columns if col not in saved_order]
-                    # Add any missing columns at the end
-                    return saved_order + missing_columns
-            
-            # Return default order if no saved preference
-            return default_columns
-        except Exception as e:
-            # Return default order if there's an error loading preferences
-            return default_columns
-    
-    def _apply_column_order(self, df, table_type):
-        """
-        Apply saved column order to a DataFrame.
-        Args:
-            df (pandas.DataFrame): DataFrame to reorder
-            table_type (str): 'equipment' or 'select_options'
-        Returns:
-            pandas.DataFrame: DataFrame with columns in saved order
-        """
-        if df is None or df.empty:
-            return df
-        
-        current_columns = list(df.columns)
-        ordered_columns = self._load_column_order(table_type, current_columns)
-        
-        # Filter to only include columns that actually exist in the DataFrame
-        valid_ordered_columns = [col for col in ordered_columns if col in current_columns]
-        
-        # Add any columns that weren't in the saved order at the end
-        missing_columns = [col for col in current_columns if col not in valid_ordered_columns]
-        final_order = valid_ordered_columns + missing_columns
-        
-        return df[final_order]
-    
-    def rename_column_in_db(self, old_col_name, new_col_name):
-        """
-        Rename a column in all records in the Equipment collection and update the DataFrame.
-        Column position is preserved in all DataFrames.
-        Args:
-            old_col_name (str): Current name of the column
-            new_col_name (str): New name for the column
-        Returns:
-            int: Number of records updated
-        """
-        try:
-            # Use MongoDB's $rename operator to rename the field
-            update_result = self.Equipment_collection.update_many(
-                {},
-                {"$rename": {old_col_name: new_col_name}}
-            )
-            
-            # Also update the DataFrame in memory - preserving column order and putting ID first
-            if old_col_name in self.df.columns:
-                # Store original column order
-                original_columns = self.df.columns.tolist()
-                # Rename the column (preserves order automatically)
-                self.df = self.df.rename(columns={old_col_name: new_col_name})
-                # Verify order is preserved (this is just for safety, pandas.rename should preserve order)
-                new_columns = [new_col_name if col == old_col_name else col for col in original_columns]
-                self.df = self.df[new_columns]
-                # Apply saved column order for equipment table
-                self.df = self._apply_column_order(self.df, 'equipment')
-            
-            # Update other DataFrames if they exist - preserving column order and putting ID first
-            if hasattr(self, 'db_df') and self.db_df is not None and old_col_name in self.db_df.columns:
-                original_columns = self.db_df.columns.tolist()
-                self.db_df = self.db_df.rename(columns={old_col_name: new_col_name})
-                new_columns = [new_col_name if col == old_col_name else col for col in original_columns]
-                self.db_df = self.db_df[new_columns]
-                # Apply saved column order for equipment table
-                self.db_df = self._apply_column_order(self.db_df, 'equipment')
-            
-            if hasattr(self, 'display_df') and self.display_df is not None and old_col_name in self.display_df.columns:
-                original_columns = self.display_df.columns.tolist()
-                self.display_df = self.display_df.rename(columns={old_col_name: new_col_name})
-                new_columns = [new_col_name if col == old_col_name else col for col in original_columns]
-                self.display_df = self.display_df[new_columns]
-                # Apply saved column order for equipment table
-                self.display_df = self._apply_column_order(self.display_df, 'equipment')
-            
-            # Re-identify column types after rename to update category lists
-            self._identify_column_types()
-            
-            return update_result.modified_count
-        except Exception as e:
-            raise Exception(f"Error renaming column in database: {str(e)}")
-    
-    def add_column_to_select_options_db(self, col_name, default_value=None):
-        """
-        Add a new column to all records in the Equipment_select_options collection.
-        Args:
-            col_name (str): Name of the new column
-            default_value: Default value for the new column (optional)
-        Returns:
-            int: Number of records updated
-        """
-        update_result = self.Equipment_select_options.update_many(
-            {},
-            {"$set": {col_name: default_value}}
-        )
-        # Also update the DataFrame in memory
-        if hasattr(self, 'Equipment_select_options_db_df') and self.Equipment_select_options_db_df is not None:
-            if col_name not in self.Equipment_select_options_db_df.columns:
-                self.Equipment_select_options_db_df[col_name] = default_value
-                # Apply saved column order for select options table
-                self.Equipment_select_options_db_df = self._apply_column_order(self.Equipment_select_options_db_df, 'select_options')
-        
-        # Auto-sync Equipment Records column if it exists
-        self._sync_equipment_column_with_select_options(col_name)
-        
-        return update_result.modified_count
-    
-    def delete_column_from_select_options_db(self, col_name):
-        """
-        Delete a column from all records in the Equipment_select_options collection.
-        Args:
-            col_name (str): Name of the column to delete
-        Returns:
-            int: Number of records updated
-        """
-        update_result = self.Equipment_select_options.update_many(
-            {},
-            {"$unset": {col_name: ""}}
-        )
-        # Also update the DataFrame in memory
-        if hasattr(self, 'Equipment_select_options_db_df') and self.Equipment_select_options_db_df is not None:
-            if col_name in self.Equipment_select_options_db_df.columns:
-                self.Equipment_select_options_db_df = self.Equipment_select_options_db_df.drop(columns=[col_name])
-        
-        return update_result.modified_count
-    
-    def rename_column_in_select_options_db(self, old_col_name, new_col_name):
-        """
-        Rename a column in all records in the Equipment_select_options collection.
-        Column position is preserved in all DataFrames.
-        Args:
-            old_col_name (str): Current name of the column
-            new_col_name (str): New name for the column
-        Returns:
-            int: Number of records updated
-        """
-        try:
-            # Use MongoDB's $rename operator to rename the field
-            update_result = self.Equipment_select_options.update_many(
-                {},
-                {"$rename": {old_col_name: new_col_name}}
-            )
-            
-            # Also update the DataFrame in memory - preserving column order and putting ID first
-            if hasattr(self, 'Equipment_select_options_db_df') and self.Equipment_select_options_db_df is not None:
-                if old_col_name in self.Equipment_select_options_db_df.columns:
-                    # Store original column order
-                    original_columns = self.Equipment_select_options_db_df.columns.tolist()
-                    # Rename the column (preserves order automatically)
-                    self.Equipment_select_options_db_df = self.Equipment_select_options_db_df.rename(columns={old_col_name: new_col_name})
-                    # Verify order is preserved (this is just for safety, pandas.rename should preserve order)
-                    new_columns = [new_col_name if col == old_col_name else col for col in original_columns]
-                    self.Equipment_select_options_db_df = self.Equipment_select_options_db_df[new_columns]
-                    # Apply saved column order for select options table
-                    self.Equipment_select_options_db_df = self._apply_column_order(self.Equipment_select_options_db_df, 'select_options')
-            
-            # Update the edited DataFrame if it exists - preserving column order and putting ID first
-            if hasattr(self, 'edited_select_options_df') and self.edited_select_options_df is not None:
-                if old_col_name in self.edited_select_options_df.columns:
-                    original_columns = self.edited_select_options_df.columns.tolist()
-                    self.edited_select_options_df = self.edited_select_options_df.rename(columns={old_col_name: new_col_name})
-                    new_columns = [new_col_name if col == old_col_name else col for col in original_columns]
-                    self.edited_select_options_df = self.edited_select_options_df[new_columns]
-                    # Apply saved column order for select options table
-                    self.edited_select_options_df = self._apply_column_order(self.edited_select_options_df, 'select_options')
-            
-            # Re-identify column types after rename to update category lists
-            self._identify_column_types()
-            
-            return update_result.modified_count
-        except Exception as e:
-            raise Exception(f"Error renaming column in select options database: {str(e)}")
-    def init_db_from_csv(self, unique_key=None):
-        """
-        Initialize the Equipment collection from CSV, inserting only unique rows based on a unique key.
-        Args:
-            unique_key (str or list): Column(s) to use as unique key. If None, use all columns.
-        """
-        # Load and clean data
-        df = self.load_data()
-        if df.empty:
-            return
-        # Remove duplicates in DataFrame
-        if unique_key:
-            df = df.drop_duplicates(subset=unique_key)
-        else:
-            df = df.drop_duplicates()
+# Ultra-aggressive anti-fading CSS and JavaScript
+ULTRA_AGGRESSIVE_CSS = """
+<style>
+/* Ultra-Aggressive Anti-Fading CSS for Maximum Speed */
 
-        records = df.to_dict(orient='records')
-        # Insert only unique records not already in DB
-        for record in records:
-            # Build filter for uniqueness
-            if unique_key:
-                if isinstance(unique_key, list):
-                    filter_query = {k: record.get(k) for k in unique_key}
-                else:
-                    filter_query = {unique_key: record.get(unique_key)}
-            else:
-                filter_query = record.copy()
-            if not self.Equipment_collection.find_one(filter_query):
-                self.Equipment_collection.insert_one(record)
+/* CRITICAL: Force ALL elements to stay visible */
+* {
+    transition: none !important;
+    animation: none !important;
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+    transition-duration: 0s !important;
+    transition-delay: 0s !important;
+    opacity: 1 !important;
+    background-color: #ffffff !important;
+}
+
+/* Force Streamlit app container */
+.stApp {
+    background-color: #ffffff !important;
+    background-image: none !important;
+    opacity: 1 !important;
+    transition: none !important;
+    animation: none !important;
+}
+
+/* Force main container */
+.main .block-container {
+    background-color: #ffffff !important;
+    background-image: none !important;
+    transition: none !important;
+    opacity: 1 !important;
+    animation: none !important;
+}
+
+/* Force ALL divs */
+.stApp > div,
+.main > div,
+.block-container > div,
+[data-testid="stAppViewContainer"] > div,
+[data-testid="stDecoration"] > div,
+div {
+    background-color: #ffffff !important;
+    opacity: 1 !important;
+    transition: none !important;
+    animation: none !important;
+}
+
+/* Force ALL Streamlit elements */
+.stButton,
+.stSelectbox,
+.stTextInput,
+.stTextArea,
+.stDataFrame,
+.stForm,
+.stCheckbox,
+.stRadio,
+.stMarkdown,
+.stCode,
+.stText {
+    background-color: #ffffff !important;
+    opacity: 1 !important;
+    transition: none !important;
+    animation: none !important;
+}
+
+/* Force ALL Streamlit elements and their children */
+.stButton *,
+.stSelectbox *,
+.stTextInput *,
+.stTextArea *,
+.stDataFrame *,
+.stForm *,
+.stCheckbox *,
+.stRadio *,
+.stMarkdown *,
+.stCode *,
+.stText * {
+    background-color: #ffffff !important;
+    opacity: 1 !important;
+    transition: none !important;
+    animation: none !important;
+}
+
+/* Force ALL elements in Streamlit app */
+.stApp * {
+    background-color: #ffffff !important;
+    opacity: 1 !important;
+    transition: none !important;
+    animation: none !important;
+}
+
+/* Prevent any loading states */
+[data-testid="stDecoration"]::before,
+[data-testid="stDecoration"]::after,
+.stApp > div::before,
+.stApp > div::after {
+    display: none !important;
+    opacity: 0 !important;
+}
+
+/* Force all text to stay visible */
+* {
+    color: inherit !important;
+    opacity: 1 !important;
+}
+
+/* Override any existing animations */
+@keyframes none {
+    from { opacity: 1; background-color: #ffffff; }
+    to { opacity: 1; background-color: #ffffff; }
+}
+
+/* Force all elements to maintain appearance */
+* {
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+    transition-duration: 0s !important;
+    transition-delay: 0s !important;
+    opacity: 1 !important;
+    background-color: #ffffff !important;
+}
+
+/* Specific fixes for AgGrid and dataframe interactions */
+.ag-root-wrapper,
+.ag-root,
+.ag-body-viewport,
+.ag-body-viewport-wrapper,
+.ag-theme-streamlit {
+    background-color: #ffffff !important;
+    transition: none !important;
+    opacity: 1 !important;
+}
+
+/* Prevent AgGrid from causing page fading */
+.ag-theme-streamlit {
+    background-color: #ffffff !important;
+    transition: none !important;
+}
+
+/* Fix for page navigation fading */
+.stSelectbox,
+.stSelectbox > div,
+.stSelectbox > div > div {
+    background-color: #ffffff !important;
+    transition: none !important;
+}
+
+/* Hide Streamlit's default elements */
+#MainMenu {visibility: hidden;}
+.stDeployButton {display: none !important;}
+button[kind="header"] {display: none !important;}
+[data-testid="stToolbar"] {display: none !important;}
+.stAppDeployButton {display: none !important;}
+footer {visibility: hidden;}
+.stApp > header {visibility: hidden;}
+
+/* Container styling */
+.block-container {
+    padding-top: 1rem;
+    padding-bottom: 2rem;
+}
+
+/* Selectbox styling */
+.stSelectbox > div > div > div > div {
+    background-color: #f0f2f6;
+}
+
+/* Main header styling */
+.main-header {
+    text-align: center;
+    color: #1f77b4;
+    font-size: 2.2rem;
+    font-weight: bold;
+    margin-bottom: 1rem;
+}
+
+/* User header styling */
+.user-header {
+    background-color: #f8f9fa;
+    padding: 0.5rem 1rem;
+    border-radius: 8px;
+    margin-bottom: 1rem;
+    border: 1px solid #e0e0e0;
+}
+
+/* Login page specific styles */
+.login-container {
+    width: 100%;
+    min-width: 350px;
+    max-width: 450px;
+    margin: 2rem auto;
+    padding: 2.5rem;
+    border-radius: 15px;
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
+    background-color: #ffffff !important;
+    border: 1px solid #e0e0e0;
+    position: relative;
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.login-header {
+    text-align: center;
+    color: #1f77b4 !important;
+    font-size: 2.2rem;
+    font-weight: bold;
+    margin-bottom: 1.5rem;
+    text-shadow: none;
+}
+
+.login-info {
+    background-color: #e3f2fd !important;
+    padding: 1.2rem;
+    border-radius: 8px;
+    margin: 1.5rem 0;
+    border-left: 4px solid #1f77b4;
+    color: #333 !important;
+}
+
+/* Login page buttons - Blue style */
+.login-container .stButton > button {
+    width: 100%;
+    background-color: #1f77b4 !important;
+    color: white !important;
+    border: none;
+    padding: 0.7rem;
+    border-radius: 8px;
+    font-weight: bold;
+    font-size: 1rem;
+    margin-top: 1rem;
+}
+
+.login-container .stButton > button:hover {
+    background-color: #1565c0 !important;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+}
+
+/* Main app buttons - White style (same as original app.py) */
+.stButton > button {
+    background-color: #ffffff !important;
+    color: #333333 !important;
+    border: 1px solid #dddddd !important;
+    border-radius: 5px;
+    padding: 0.4rem 1rem;
+    font-size: 0.9rem;
+}
+
+.stButton > button:hover {
+    background-color: #f8f9fa !important;
+    border-color: #aaaaaa !important;
+}
+
+/* Make form visible */
+.stForm {
+    background: transparent !important;
+    border: none !important;
+    padding: 0 !important;
+}
+
+/* Style form inputs - More aggressive targeting */
+.stTextInput > div > div > input,
+input[type="text"],
+input[type="password"] {
+    background-color: #f8f9fa !important;
+    border: 1px solid #ddd !important;
+    border-radius: 6px !important;
+    padding: 0.4rem !important;
+    height: 2.2rem !important;
+    font-size: 0.9rem !important;
+    line-height: 1.1 !important;
+    min-height: 2.2rem !important;
+    max-height: 2.2rem !important;
+    box-sizing: border-box !important;
+    width: 100% !important;
+    margin: 0 auto;
+    display: block;
+}
+
+/* Make input containers more compact and centered */
+.stTextInput > div {
+    margin-bottom: 0.3rem !important;
+    height: auto !important;
+    display: flex;
+    justify-content: center;
+}
+
+.stTextInput > div > div {
+    height: 2.2rem !important;
+    min-height: 2.2rem !important;
+    max-height: 2.2rem !important;
+    overflow: hidden !important;
+}
+
+.stTextInput > label {
+    font-size: 0.85rem !important;
+    margin-bottom: 0.2rem !important;
+    font-weight: 500 !important;
+    line-height: 1.1 !important;
+    display: block;
+    text-align: center;
+}
+
+/* Override any default form spacing */
+.stForm > div {
+    gap: 0.3rem !important;
+}
+
+/* Force compact form elements */
+.stForm [data-testid="stVerticalBlock"] > div {
+    gap: 0.3rem !important;
+}
+
+
+
+
+
+/* Ensure text is visible */
+div[data-testid="stMarkdownContainer"] {
+    color: #333 !important;
+}
+
+/* Style the subtitle */
+h3 {
+    color: #666 !important;
+    text-align: center;
+    margin-bottom: 2rem;
+}
+</style>
+"""
+
+ULTRA_AGGRESSIVE_JS = """
+<script>
+// Ultra-Aggressive Anti-Fading JavaScript for Maximum Speed
+
+// Ultra-fast function with minimal overhead
+function ultraFastFix() {
+    // Immediate execution without requestAnimationFrame for speed
+    document.body.style.backgroundColor = '#ffffff';
+    document.body.style.transition = 'none';
+    document.body.style.opacity = '1';
+    document.body.style.animation = 'none';
+    
+    // Force critical elements immediately
+    const appContainer = document.querySelector('.stApp');
+    if (appContainer) {
+        appContainer.style.backgroundColor = '#ffffff';
+        appContainer.style.transition = 'none';
+        appContainer.style.opacity = '1';
+        appContainer.style.animation = 'none';
+    }
+    
+    // Force all divs immediately (aggressive approach)
+    const allDivs = document.querySelectorAll('div');
+    for (let i = 0; i < allDivs.length; i++) {
+        const div = allDivs[i];
+        div.style.transition = 'none';
+        div.style.animation = 'none';
+        div.style.opacity = '1';
+        div.style.backgroundColor = '#ffffff';
+    }
+    
+    // Force all Streamlit elements
+    const stElements = document.querySelectorAll('.stButton, .stSelectbox, .stTextInput, .stDataFrame, .stForm, [data-testid="stDecoration"]');
+    for (let i = 0; i < stElements.length; i++) {
+        const element = stElements[i];
+        element.style.transition = 'none';
+        element.style.animation = 'none';
+        element.style.opacity = '1';
+        element.style.backgroundColor = '#ffffff';
+    }
+}
+
+// Ultra-fast monitoring with minimal overhead
+function ultraFastMonitoring() {
+    // Simple observer without complex logic
+    const observer = new MutationObserver(function() {
+        ultraFastFix();
+    });
+    
+    // Observe everything
+    observer.observe(document.body, {
+        attributes: true,
+        subtree: true,
+        childList: true
+    });
+}
+
+// Ultra-fast event handlers
+function setupUltraFastHandlers() {
+    // Handle all events with immediate response
+    document.addEventListener('click', ultraFastFix);
+    document.addEventListener('mousedown', ultraFastFix);
+    document.addEventListener('mouseup', ultraFastFix);
+    document.addEventListener('visibilitychange', ultraFastFix);
+    window.addEventListener('focus', ultraFastFix);
+    window.addEventListener('load', ultraFastFix);
+}
+
+// Ultra-fast initialization
+function ultraFastInit() {
+    // Run immediately
+    ultraFastFix();
+    
+    // Set up monitoring
+    ultraFastMonitoring();
+    
+    // Set up event handlers
+    setupUltraFastHandlers();
+    
+    // Run very frequently for maximum responsiveness
+    setInterval(ultraFastFix, 100);
+    
+    // Additional immediate checks
+    setTimeout(ultraFastFix, 10);
+    setTimeout(ultraFastFix, 50);
+    setTimeout(ultraFastFix, 100);
+}
+
+// Initialize immediately
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', ultraFastInit);
+} else {
+    ultraFastInit();
+}
+
+// Run immediately
+ultraFastFix();
+
+// Safety: run every 50ms for the first 5 seconds
+let safetyCounter = 0;
+const safetyInterval = setInterval(function() {
+    ultraFastFix();
+    safetyCounter++;
+    if (safetyCounter >= 100) { // 5 seconds
+        clearInterval(safetyInterval);
+    }
+}, 50);
+
+// Additional safety: run every 100ms indefinitely
+setInterval(ultraFastFix, 100);
+</script>
+"""
+
+class EquipmentManagementAppFast:
     """
     A class-based Streamlit application for managing equipment data from CSV files.
+    Optimized version with ultra-aggressive anti-fading implementation.
     """
-
-    def filter_select_options_df(self, df, filter_columns, search_text):
-
-        filtered_df = df.copy()
-        # Category
-        if self.category_cols and 'category' in filter_columns and filter_columns['category'] != 'All' and self.category_cols[0] in filtered_df.columns:
-            filtered_df = filtered_df[filtered_df[self.category_cols[0]] == filter_columns['category']]
-        # Vendor
-        if self.vendor_cols and 'vendor' in filter_columns and filter_columns['vendor'] != 'All' and self.vendor_cols[0] in filtered_df.columns:
-            filtered_df = filtered_df[filtered_df[self.vendor_cols[0]] == filter_columns['vendor']]
-        # Location
-        if self.location_cols and 'location' in filter_columns and filter_columns['location'] != 'All' and self.location_cols[0] in filtered_df.columns:
-            filtered_df = filtered_df[filtered_df[self.location_cols[0]] == filter_columns['location']]
-        # Check
-        if self.check_cols and 'check' in filter_columns and filter_columns['check'] != 'All' and self.check_cols[0] in filtered_df.columns:
-            filtered_df = filtered_df[filtered_df[self.check_cols[0]].astype(str) == filter_columns['check']]
-        # Serial
-        if self.serial_cols and 'serial' in filter_columns and filter_columns['serial'] != 'All' and self.serial_cols[0] in filtered_df.columns:
-            filtered_df = filtered_df[filtered_df[self.serial_cols[0]] == filter_columns['serial']]
-        # Text search
-        if search_text and self.search_cols:
-            mask = pd.Series([False] * len(filtered_df))
-            for col in self.search_cols:
-                if col in filtered_df.columns:
-                    mask |= filtered_df[col].astype(str).str.contains(search_text, case=False, na=False)
-            filtered_df = filtered_df[mask]
-        return filtered_df
     
-    def init_db_Equipment_select_options(self, unique_key=None):
-
-        # Insert unique, case-insensitive, trimmed values for Location, Vendor, Category into Equipment_select_options DB
-        # Read the CSV as a DataFrame to preserve the structure
-        csv_path = Path("‏‏select_options_csv.csv")
-        try:
-            df = pd.read_csv(csv_path)
-        except Exception as e:
-            st.warning(f"Could not read Equipment_select_options.csv: {e}")
-            
-
-        # Remove all existing records in the Equipment_select_options collection
-        self.Equipment_select_options.delete_many({})
-
-        # Insert each row from the DataFrame as a document in MongoDB
-        for _, row in df.iterrows():
-            doc = row.to_dict()
-            # Ensure a unique index for each row
-            doc["index"] = str(uuid.uuid4())
-            # Check for duplicates before inserting
-            if not self.Equipment_select_options.find_one({k: doc[k] for k in doc if k != "index"}):
-                self.Equipment_select_options.insert_one(doc)
-
-
-
     def __init__(self, csv_filename="ACT-LAB-Equipment-List.csv"):
         """
         Initialize the Equipment Management App.
@@ -386,6 +494,14 @@ class EquipmentManagementApp:
         Args:
             csv_filename (str): Name of the CSV file to load
         """
+        # Initialize cookie controller FIRST, before any other session state modifications
+        try:
+            from streamlit_cookies_controller import CookieController
+            self.cookie_controller = CookieController()
+        except ImportError:
+            st.warning("⚠️ Cookie controller not available. Session persistence may not work properly.")
+            self.cookie_controller = None
+        
         self.csv_filename = csv_filename
         self.df = None
         self.filtered_df = None
@@ -402,23 +518,31 @@ class EquipmentManagementApp:
 
         # Initialize authentication manager
         self.auth_manager = AuthenticationManager(login_title=self.login)
-    
-    def _hash_password(self, password):
-        """Hash password using SHA-256."""
-        return hashlib.sha256(password.encode()).hexdigest()
+        
+        # Initialize session storage file
+        self.sessions_file = Path("sessions_storage.json")
+        
+        # Initialize session storage in session state
+        if 'sessions_storage' not in st.session_state:
+            st.session_state.sessions_storage = self._load_sessions_from_file()
+        
+        # Also store sessions in a more persistent way using multiple session state keys
+        if 'persistent_sessions' not in st.session_state:
+            st.session_state.persistent_sessions = st.session_state.sessions_storage.copy()
+        
+        # Initialize Equipment Select Options system
+        if EquipmentSelectOptionsSystem:
+            self.select_options_system = EquipmentSelectOptionsSystem()
+        else:
+            self.select_options_system = None
     
     def _verify_password(self, username, password):
         """Verify username and password."""
-        if username in self.users:
-            hashed_password = self._hash_password(password)
-            return self.users[username]["password"] == hashed_password
-        return False
+        return self.auth_manager._verify_password(username, password)
     
     def _is_admin(self):
         """Check if current user is admin (case-insensitive)."""
-        user_role = str(st.session_state.get('user_role', '')).lower()
-        username = str(st.session_state.get('username', '')).lower()
-        return user_role == "admin" or username == "admin"
+        return is_admin(self.auth_manager if hasattr(self, 'auth_manager') else None)
     
     def _load_sessions_from_file(self):
         """Load sessions from file storage."""
@@ -455,6 +579,10 @@ class EquipmentManagementApp:
     
     def set_cookie(self, cookie_name, value):
         """Set cookie with better error handling and verification."""
+        if not self.cookie_controller:
+            st.warning("⚠️ Cookie controller not available. Session persistence may not work properly.")
+            return False
+            
         try:
             expires = datetime.now() + timedelta(minutes=480)
             self.cookie_controller.set(cookie_name, value, path="/", same_site="Lax", expires=expires)
@@ -510,6 +638,9 @@ class EquipmentManagementApp:
     
     def load_session(self):
         """Load session from cookies similar to your MongoDB version."""
+        if not self.cookie_controller:
+            return False
+            
         try:
             session_token = self.cookie_controller.get("session_token")
             if session_token:
@@ -608,10 +739,11 @@ class EquipmentManagementApp:
             self._save_sessions_to_file()
             
             # Remove cookie
-            try:
-                self.cookie_controller.remove("session_token")
-            except:
-                pass
+            if self.cookie_controller:
+                try:
+                    self.cookie_controller.remove("session_token")
+                except:
+                    pass
         except Exception as e:
             # Silent cleanup
             pass
@@ -641,59 +773,169 @@ class EquipmentManagementApp:
             st.session_state.session_persistent = True
     
     def login_page(self):
-        """Display the login page."""
-        # Check if user is already authenticated via cookies
-        if self.load_session():
-            # User has valid session, redirect to main app
-            st.rerun()
-            return
-        
-        # Debug: Check current authentication status
-        current_auth = st.session_state.get('authenticated', False)
-        current_session_id = st.session_state.get('session_id')
-        current_username = st.session_state.get('username')
-        
-        # Check if user is already authenticated (session persistence)
-        if (current_auth and 
-            bool(current_session_id) and 
-            bool(current_username)):
-            # User has valid session, redirect to main app by returning
-            return
-        
+        """Display the login page with ultra-aggressive anti-fading."""
         # Custom CSS for login page
         st.markdown("""
             <style>
+            /* Ultra-Fast Anti-Fading CSS for Complex Streamlit Applications */
+            
+            /* CRITICAL: Prevent ALL transitions and animations immediately */
+            * {
+                transition: none !important;
+                animation: none !important;
+                animation-duration: 0s !important;
+                animation-delay: 0s !important;
+                transition-duration: 0s !important;
+                transition-delay: 0s !important;
+                opacity: 1 !important;
+            }
+            
+            /* Force consistent background during ALL states */
+            .stApp {
+                background-color: #ffffff !important;
+                background-image: none !important;
+                opacity: 1 !important;
+                transition: none !important;
+                animation: none !important;
+            }
+            
+            .main .block-container {
+                background-color: #ffffff !important;
+                background-image: none !important;
+                transition: none !important;
+                opacity: 1 !important;
+                animation: none !important;
+                padding-top: 2rem;
+                min-height: 100vh;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+            }
+            
+            /* Target ALL Streamlit elements that might fade */
+            .stApp > div,
+            .main > div,
+            .block-container > div,
+            [data-testid="stAppViewContainer"] > div,
+            [data-testid="stDecoration"] > div {
+                background-color: #ffffff !important;
+                opacity: 1 !important;
+                transition: none !important;
+                animation: none !important;
+            }
+            
+            /* Target Streamlit's loading and decoration elements */
+            .stApp > div[data-testid="stDecoration"] {
+                background-color: #ffffff !important;
+                background-image: none !important;
+                opacity: 1 !important;
+                transition: none !important;
+                animation: none !important;
+            }
+            
+            /* Prevent opacity changes during loading */
+            .stApp > div,
+            .main > div,
+            .block-container > div {
+                opacity: 1 !important;
+                background-color: #ffffff !important;
+                transition: none !important;
+                animation: none !important;
+            }
+            
+            /* Override any Streamlit loading states */
+            [data-testid="stAppViewContainer"] {
+                background-color: #ffffff !important;
+                opacity: 1 !important;
+                transition: none !important;
+                animation: none !important;
+            }
+            
+            /* Prevent any fade effects from Streamlit's internal CSS */
+            .stApp > div[data-testid="stDecoration"]::before,
+            .stApp > div[data-testid="stDecoration"]::after,
+            .stApp > div::before,
+            .stApp > div::after {
+                display: none !important;
+                opacity: 0 !important;
+            }
+            
+            /* Force ALL elements to maintain their appearance */
+            .stApp * {
+                transition: none !important;
+                animation: none !important;
+                opacity: 1 !important;
+            }
+            
+            /* CRITICAL: Prevent fading during rerun operations */
+            .stApp > div[data-testid="stDecoration"] {
+                background-color: #ffffff !important;
+                opacity: 1 !important;
+                transition: none !important;
+                animation: none !important;
+            }
+            
+            /* Prevent any loading states during rerun */
+            .stApp > div[data-testid="stDecoration"]::before,
+            .stApp > div[data-testid="stDecoration"]::after {
+                display: none !important;
+                opacity: 0 !important;
+            }
+            
+            /* Force all elements to stay visible during rerun */
+            .stApp > div,
+            .main > div,
+            .block-container > div,
+            [data-testid="stAppViewContainer"] > div {
+                opacity: 1 !important;
+                background-color: #ffffff !important;
+                transition: none !important;
+                animation: none !important;
+            }
+            
+            /* Prevent any Streamlit internal loading animations */
+            .stApp * {
+                animation-duration: 0s !important;
+                animation-delay: 0s !important;
+                transition-duration: 0s !important;
+                transition-delay: 0s !important;
+                opacity: 1 !important;
+            }
+            
             /* Hide Streamlit's default elements */
             #MainMenu {visibility: hidden;}
             .stDeployButton {display: none !important;}
             footer {visibility: hidden;}
             .stApp > header {visibility: hidden;}
             
-            /* Center the login form and set width to 50% */
-            .main .block-container {
-            padding-top: 2rem;
-            background-color: #ffffff;
-            min-height: 100vh;
-            display: flex;
-            justify-content: center;
-            align-items: center;
+            /* Remove any unwanted white boxes or containers */
+            .stApp > div:not([data-testid="stAppViewContainer"]):not([data-testid="stDecoration"]) {
+                background: transparent !important;
+                box-shadow: none !important;
+                border: none !important;
             }
             
-            .login-container {
-            width: 100%;
-            min-width: 350px;
-            max-width: 450px;
-            margin: 2rem auto;
-            padding: 2.5rem;
-            border-radius: 15px;
-            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
-            background-color: #ffffff !important;
-            border: 1px solid #e0e0e0;
-            position: relative;
-            z-index: 1000;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
+            /* Ensure clean background */
+            .stApp {
+                background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%) !important;
+                background-image: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%) !important;
+            }
+            
+            .main .block-container {
+                background: transparent !important;
+                padding-top: 1rem !important;
+                padding-bottom: 1rem !important;
+            }
+            
+            /* Login form styling without container */
+            .login-header {
+                text-align: center;
+                color: #1f77b4 !important;
+                font-size: 2.2rem;
+                font-weight: bold;
+                margin-bottom: 1rem;
+                text-shadow: none;
+                background: transparent !important;
             }
             
             .login-header {
@@ -715,15 +957,23 @@ class EquipmentManagementApp:
             }
             
             .stButton > button {
-            width: 100%;
-            background-color: #1f77b4 !important;
-            color: white !important;
-            border: none;
-            padding: 0.7rem;
-            border-radius: 8px;
-            font-weight: bold;
-            font-size: 1rem;
-            margin-top: 1rem;
+                width: 100%;
+                background-color: #1f77b4 !important;
+                color: white !important;
+                border: none;
+                padding: 0.7rem;
+                border-radius: 8px;
+                font-weight: bold;
+                font-size: 1rem;
+                margin-top: 1rem;
+                max-width: 200px;
+            }
+            
+            /* Center buttons */
+            .stButton {
+                display: flex;
+                justify-content: center;
+                width: 100%;
             }
             
             .stButton > button:hover {
@@ -732,14 +982,24 @@ class EquipmentManagementApp:
             box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
             }
             
-            /* Make form visible */
+            /* Make form visible and centered */
             .stForm {
-            background: transparent !important;
-            border: none !important;
-            padding: 0 !important;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
+                background: transparent !important;
+                border: none !important;
+                padding: 0 !important;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                max-width: 400px;
+                margin: 0 auto;
+            }
+            
+            /* Center all form elements */
+            .stForm > div {
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                width: 100%;
             }
             
             /* Style form inputs - More aggressive targeting */
@@ -812,17 +1072,245 @@ class EquipmentManagementApp:
             text-align: center;
             margin-bottom: 2rem;
             }
+            
+            /* Additional fixes for Streamlit's internal elements that cause fading */
+            .stApp > div[data-testid="stDecoration"] {
+                background-color: #ffffff !important;
+                background-image: none !important;
+            }
+            
+            /* Prevent any loading overlays */
+            .stApp > div[data-testid="stDecoration"]::before,
+            .stApp > div[data-testid="stDecoration"]::after {
+                display: none !important;
+            }
+            
+            /* Force all Streamlit elements to maintain appearance */
+            .stApp * {
+                transition: none !important;
+                animation: none !important;
+            }
+            
+            /* Specific fixes for AgGrid and dataframe interactions */
+            .ag-root-wrapper,
+            .ag-root,
+            .ag-body-viewport,
+            .ag-body-viewport-wrapper,
+            .ag-theme-streamlit {
+                background-color: #ffffff !important;
+                transition: none !important;
+                opacity: 1 !important;
+            }
+            
+            /* Prevent any loading overlays or fade effects */
+            .stApp > div[data-testid="stDecoration"]::before,
+            .stApp > div[data-testid="stDecoration"]::after,
+            .stApp > div::before,
+            .stApp > div::after {
+                display: none !important;
+                opacity: 0 !important;
+            }
+            
+            /* Force all interactive elements to maintain appearance */
+            .stButton > button,
+            .stSelectbox > div,
+            .stTextInput > div,
+            .stTextArea > div,
+            .stDataFrame > div,
+            .stForm > div {
+                transition: none !important;
+                animation: none !important;
+                opacity: 1 !important;
+                background-color: #ffffff !important;
+            }
+            
+            /* Prevent any hover effects that might cause fading */
+            .stButton > button:hover,
+            .stSelectbox > div:hover,
+            .stTextInput > div:hover,
+            .stTextArea > div:hover,
+            .stDataFrame > div:hover,
+            .stForm > div:hover {
+                background-color: #ffffff !important;
+                transition: none !important;
+                opacity: 1 !important;
+                animation: none !important;
+            }
+            
+            /* CRITICAL: Additional ultra-fast fixes for complex apps */
+            /* Force all elements to maintain opacity */
+            .stApp *,
+            .main *,
+            .block-container *,
+            [data-testid="stAppViewContainer"] * {
+                opacity: 1 !important;
+                transition: none !important;
+                animation: none !important;
+            }
+            
+            /* Prevent any CSS animations or transitions */
+            @keyframes none {
+                from { opacity: 1; }
+                to { opacity: 1; }
+            }
+            
+            /* Override any existing animations */
+            * {
+                animation-duration: 0s !important;
+                animation-delay: 0s !important;
+                transition-duration: 0s !important;
+                transition-delay: 0s !important;
+                opacity: 1 !important;
+            }
             </style>
+            
+            <script>
+            // Ultra-Aggressive Anti-Fading JavaScript for Maximum Speed
+            
+            // Ultra-fast function with minimal overhead
+            function ultraFastFix() {
+                // Immediate execution without requestAnimationFrame for speed
+                document.body.style.backgroundColor = '#ffffff';
+                document.body.style.transition = 'none';
+                document.body.style.opacity = '1';
+                document.body.style.animation = 'none';
+                
+                // Force critical elements immediately
+                const appContainer = document.querySelector('.stApp');
+                if (appContainer) {
+                    appContainer.style.backgroundColor = '#ffffff';
+                    appContainer.style.transition = 'none';
+                    appContainer.style.opacity = '1';
+                    appContainer.style.animation = 'none';
+                }
+                
+                // Force all divs immediately (aggressive approach)
+                const allDivs = document.querySelectorAll('div');
+                for (let i = 0; i < allDivs.length; i++) {
+                    const div = allDivs[i];
+                    div.style.transition = 'none';
+                    div.style.animation = 'none';
+                    div.style.opacity = '1';
+                    div.style.backgroundColor = '#ffffff';
+                }
+                
+                // Force all Streamlit elements
+                const stElements = document.querySelectorAll('.stButton, .stSelectbox, .stTextInput, .stDataFrame, .stForm, [data-testid="stDecoration"]');
+                for (let i = 0; i < stElements.length; i++) {
+                    const element = stElements[i];
+                    element.style.transition = 'none';
+                    element.style.animation = 'none';
+                    element.style.opacity = '1';
+                    element.style.backgroundColor = '#ffffff';
+                }
+            }
+            
+            // Ultra-fast monitoring with minimal overhead
+            function ultraFastMonitoring() {
+                // Simple observer without complex logic
+                const observer = new MutationObserver(function() {
+                    ultraFastFix();
+                });
+                
+                // Observe everything
+                observer.observe(document.body, {
+                    attributes: true,
+                    subtree: true,
+                    childList: true
+                });
+            }
+            
+            // Ultra-fast event handlers
+            function setupUltraFastHandlers() {
+                // Handle all events with immediate response
+                document.addEventListener('click', ultraFastFix);
+                document.addEventListener('mousedown', ultraFastFix);
+                document.addEventListener('mouseup', ultraFastFix);
+                document.addEventListener('visibilitychange', ultraFastFix);
+                window.addEventListener('focus', ultraFastFix);
+                window.addEventListener('load', ultraFastFix);
+            }
+            
+            // Ultra-fast initialization
+            function ultraFastInit() {
+                // Run immediately
+                ultraFastFix();
+                
+                // Set up monitoring
+                ultraFastMonitoring();
+                
+                // Set up event handlers
+                setupUltraFastHandlers();
+                
+                // Run very frequently for maximum responsiveness
+                setInterval(ultraFastFix, 100);
+                
+                // Additional immediate checks
+                setTimeout(ultraFastFix, 10);
+                setTimeout(ultraFastFix, 50);
+                setTimeout(ultraFastFix, 100);
+            }
+            
+            // Initialize immediately
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', ultraFastInit);
+            } else {
+                ultraFastInit();
+            }
+            
+            // Run immediately
+            ultraFastFix();
+            
+            // Safety: run every 50ms for the first 5 seconds
+            let safetyCounter = 0;
+            const safetyInterval = setInterval(function() {
+                ultraFastFix();
+                safetyCounter++;
+                if (safetyCounter >= 100) { // 5 seconds
+                    clearInterval(safetyInterval);
+                }
+            }, 50);
+            
+            // Additional safety: run every 100ms indefinitely
+            setInterval(ultraFastFix, 100);
+            </script>
         """, unsafe_allow_html=True)
-        # Remove the login-container div wrapper (do not add <div class="login-container">)
-        # st.markdown('<div class="login-container">', unsafe_allow_html=True)
         
-        # st.markdown('<h1 class="login-header">🔬 ACT Lab Equipment</h1>', unsafe_allow_html=True)
+        # Check if user is already authenticated via cookies
+        if self.load_session():
+            # User has valid session, redirect to main app
+            # Use session state instead of rerun to prevent fading
+            st.session_state['redirect_to_main'] = True
+            return
+        
+        # Debug: Check current authentication status
+        current_auth = st.session_state.get('authenticated', False)
+        current_session_id = st.session_state.get('session_id')
+        current_username = st.session_state.get('username')
+        
+        # Check if user is already authenticated (session persistence)
+        if (current_auth and 
+            bool(current_session_id) and 
+            bool(current_username)):
+            # User has valid session, redirect to main app by returning
+            return
+        
+        # Display login form with proper styling
         st.markdown(f'<h1 class="login-header">🔬 {self.login}</h1>', unsafe_allow_html=True)
         st.markdown('<h3 style="text-align: center; color: #666;">Management System</h3>', unsafe_allow_html=True)
         
         # Add a visible separator
         st.markdown("---")
+        
+        # Check if signup should be shown
+        if st.session_state.get('show_signup', False):
+            self.auth_manager.signup_page()
+            return
+        
+        # Check if forgot password should be shown
+        if st.session_state.get('show_forgot_password', False):
+            self.auth_manager.forgot_password_page()
+            return
         
         # Login form
         with st.form("login_form"):
@@ -838,9 +1326,11 @@ class EquipmentManagementApp:
                 if username and password:  # Basic validation
                     if self._verify_password(username, password):
                         # Save session with cookies
-                        if self.save_session(username, self.users[username]["role"]):
-                            st.success(f"Welcome, {self.users[username]['name']}!")
+                        users = self.auth_manager.users
+                        if self.save_session(username, users[username]["role"]):
+                            st.success(f"Welcome, {users[username]['name']}!")
                             time.sleep(1)  # Small delay to show success message
+                            # Force rerun to show main application
                             st.rerun()
                         else:
                             st.error("❌ Failed to create session. Please try again.")
@@ -848,6 +1338,20 @@ class EquipmentManagementApp:
                         st.error("❌ Invalid username or password!")
                 else:
                     st.warning("⚠️ Please enter both username and password!")
+        
+        # Add Forgot Password and Signup buttons
+        st.markdown("---")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("🔑 Forgot Password?", key="forgot_password_btn"):
+                st.session_state.show_forgot_password = True
+                st.rerun()
+        
+        with col2:
+            if st.button("📝 Sign Up", key="signup_btn"):
+                st.session_state.show_signup = True
+                st.rerun()
         
         # Demo credentials info - commented out for production
         # st.markdown('<div class="login-info">', unsafe_allow_html=True)
@@ -858,3503 +1362,16 @@ class EquipmentManagementApp:
         # **Technician:** technician / tech123
         # """)
         # st.markdown('</div>', unsafe_allow_html=True)
-
-        st.markdown('</div>', unsafe_allow_html=True)
     
-    def logout(self):
-        """Handle user logout."""
-        try:
-            # Get current session token
-            session_token = st.session_state.get('session_id')
-            if session_token:
-                # Clean up from all storage locations
-                self._cleanup_session(session_token)
-        except Exception as e:
-            # Silent error handling for logout
-            pass
-        
-        # Clear all session data
-        st.session_state.authenticated = False
-        st.session_state.username = None
-        st.session_state.user_role = None
-        st.session_state.login_time = None
-        st.session_state.session_id = None
-        st.session_state.session_persistent = False
-        
-        # Remove any additional session keys that might exist
-        keys_to_remove = [key for key in st.session_state.keys() if key.startswith('login_') or key == '_persist']
-        for key in keys_to_remove:
-            del st.session_state[key]
-        
-        st.rerun()
-    
-    def _check_session_validity(self):
-        """Check if the current session is still valid."""
-        # Ensure session is initialized
-        self._initialize_session()
-        
-        # Check if user is authenticated
-        if not st.session_state.get('authenticated', False):
-            return False
-        
-        # Check if required session data exists
-        username = st.session_state.get('username')
-        user_role = st.session_state.get('user_role')
-        if not username or not user_role:
-            return False
-        
-        # Check if login time exists and session hasn't expired (24 hours)
-        login_time = st.session_state.get('login_time')
-        if login_time:
-            import time
-            session_duration = time.time() - login_time
-            # Session expires after 24 hours (86400 seconds)
-            if session_duration > 86400:
-                self.logout()
-                return False
-        
-        # Verify user still exists in system
-        if username not in self.users:
-            self.logout()
-            return False
-        
-        return True
-    
-    def display_header(self):
-        """Display header with user info and logout."""
-        # User info and logout in a container
-        st.markdown('<div class="user-header">', unsafe_allow_html=True)
-        col1, col2 = st.columns([3, 1])
-        
-        with col1:
-            user_info = self.users[st.session_state.username]
-            # Calculate session duration
-            if st.session_state.login_time:
-                session_duration = time.time() - st.session_state.login_time
-                hours = int(session_duration // 3600)
-                minutes = int((session_duration % 3600) // 60)
-                session_info = f" (Session: {hours}h {minutes}m)" if hours > 0 or minutes > 0 else " (Just logged in)"
-            else:
-                session_info = ""
-            
-            st.markdown(f"👤 **{user_info['name']}** ({user_info['role'].title()}){session_info}")
-        
-        with col2:
-            if st.button("🚪 Logout", key="logout_btn"):
-                self.auth_manager.logout()
-        
-        st.markdown('</div>', unsafe_allow_html=True)
-        
-        # Main title
-        st.markdown(f'<h1 class="main-header">{self.main_page_titel}</h1>', unsafe_allow_html=True)
-
-
     def configure_page(self):
-        """Configure Streamlit page settings and CSS styling."""
-        # Page config is now set at module level, just add CSS
-        # Custom CSS for better styling
-        st.markdown("""
-            <style>
-                /* Hide Streamlit's default elements */
-                #MainMenu {visibility: hidden;}
-                .stDeployButton {display: none !important;}
-                button[kind="header"] {display: none !important;}
-                [data-testid="stToolbar"] {display: none !important;}
-                .stAppDeployButton {display: none !important;}
-                footer {visibility: hidden;}
-                .stApp > header {visibility: hidden;}
-                
-                .block-container {
-                    padding-top: 1rem;
-                    padding-bottom: 2rem;
-                }
-                .stSelectbox > div > div > div > div {
-                    background-color: #f0f2f6;
-                }
-                .main-header {
-                    text-align: center;
-                    color: #1f77b4;
-                    font-size: 2.2rem;
-                    font-weight: bold;
-                    margin-bottom: 1rem;
-                }
-                
-                /* Header styling for better visibility */
-                .user-header {
-                    background-color: #f8f9fa;
-                    padding: 0.5rem 1rem;
-                    border-radius: 8px;
-                    margin-bottom: 1rem;
-                    border: 1px solid #e0e0e0;
-                }
-                
-                /* Ensure buttons are visible with white background */
-                .stButton > button {
-                    background-color: #ffffff !important;
-                    color: #333333 !important;
-                    border: 1px solid #dddddd !important;
-                    border-radius: 5px;
-                    padding: 0.4rem 1rem;
-                    font-size: 0.9rem;
-                }
-                
-                .stButton > button:hover {
-                    background-color: #f8f9fa !important;
-                    border-color: #aaaaaa !important;
-                }
-            </style>
-        """, unsafe_allow_html=True)
+        """Configure page settings with ultra-aggressive anti-fading."""
+        # Inject ultra-aggressive anti-fading CSS and JavaScript
+        st.markdown(ULTRA_AGGRESSIVE_CSS + ULTRA_AGGRESSIVE_JS, unsafe_allow_html=True)
     
-    @st.cache_data
-    def load_data(_self):
-        """
-        Load the CSV file and clean it.
-        
-        Returns:
-            pandas.DataFrame: Cleaned DataFrame or empty DataFrame if error
-        """
-        csv_path = Path(_self.csv_filename)
-        if not csv_path.exists():
-            st.error(f"CSV file '{_self.csv_filename}' not found!")
-            return pd.DataFrame()
-        
-        try:
-            # Try different encodings to handle Unicode issues
-            encodings = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
-            df = None
-            
-            for encoding in encodings:
-                try:
-                    df = pd.read_csv(csv_path, encoding=encoding)
-                    break
-                except UnicodeDecodeError:
-                    continue
-            
-            if df is None:
-                st.error("Could not read CSV file with any supported encoding")
-                return pd.DataFrame()
-            
-            return _self._clean_dataframe(df)
-            
-        except Exception as e:
-            st.error(f"Error reading CSV file: {str(e)}")
-            return pd.DataFrame()
-    
-    def _clean_dataframe(self, df):
-        """
-        Clean the DataFrame by removing empty columns and rows.
-        
-        Args:
-            df (pandas.DataFrame): Raw DataFrame
-            
-        Returns:
-            pandas.DataFrame: Cleaned DataFrame
-        """
-        # Get all actual columns from the CSV (not hardcoded)
-        actual_columns = df.columns.tolist()
-        
-        # Remove columns that are mostly empty (more than 95% empty)
-        non_empty_columns = []
-        for col in actual_columns:
-            non_empty_ratio = (df[col].notna() & (df[col] != '')).sum() / len(df)
-            if non_empty_ratio > 0.05:  # Keep columns with more than 5% data
-                non_empty_columns.append(col)
-        
-        # Keep only non-empty columns
-        if non_empty_columns:
-            df = df[non_empty_columns]
-        
-        # Clean the data
-        df = df.replace('', np.nan)  # Replace empty strings with NaN
-        df = df.dropna(how='all')  # Remove completely empty rows
-        
-        # Rename the first column for clarity if it has trailing space
-        first_col = df.columns[0]
-        if first_col.strip() != first_col:  # Has trailing/leading spaces
-            df = df.rename(columns={first_col: first_col.strip() + '_ID'})
-        
-        return df
-    
-    def _identify_column_types(self):
-        """Identify different types of columns based on their names."""
-        # Check if self.df exists and is not None
-        if self.df is None or self.df.empty:
-            # Initialize empty lists for all column types
-            self.available_columns = []
-            self.category_cols = []
-            self.vendor_cols = []
-            self.location_cols = []
-            self.serial_cols = []
-            self.check_cols = []
-            self.search_cols = []
-            self.unique_id_cols = []
-            return
-        
-        self.available_columns = self.df.columns.tolist()
-        
-        # Look for category-like columns
-        self.category_cols = [col for col in self.available_columns if 'category' in col.lower()]
-        
-        # Look for vendor-like columns
-        self.vendor_cols = [col for col in self.available_columns if 'vendor' in col.lower()]
-        
-        # Look for location-like columns
-        self.location_cols = [col for col in self.available_columns if 'location' in col.lower()]
-        
-        # Look for serial-like columns
-        self.serial_cols = [col for col in self.available_columns if 'serial' in col.lower()]
-        
-        # Look for check/status-like columns
-        self.check_cols = [col for col in self.available_columns if any(term in col.lower() for term in ['check', 'status', 'active'])]
-        
-        # Text search columns
-        self.search_cols = [col for col in self.available_columns if any(term in col.lower() for term in ['description', 'model', 'serial', 'comments'])]
-        
-        # Identify unique identifier columns (in order of preference)
-        self.unique_id_cols = []
-        
-        # More precise pattern matching for ID columns - prioritize actual ID over serial
-        id_patterns = [
-            ('id', lambda col: col.lower() == 'id' or col.lower().endswith('_id') or col.lower().startswith('id_')),
-            ('uuid', lambda col: 'uuid' in col.lower()),
-            ('serial', lambda col: 'serial' in col.lower()),
-            ('_id', lambda col: col.lower() == '_id')
-        ]
-        
-        for pattern_name, pattern_func in id_patterns:
-            matching_cols = [col for col in self.available_columns if pattern_func(col)]
-            self.unique_id_cols.extend(matching_cols)
-        
-        # Remove duplicates while preserving order
-        self.unique_id_cols = list(dict.fromkeys(self.unique_id_cols))
-    
-    def _get_best_unique_identifier(self, row_data):
-        """Get the best unique identifier for a row based on available columns and data."""
-        if not hasattr(self, 'unique_id_cols') or not self.unique_id_cols:
-            self._identify_column_types()
-        
-        # If still no unique_id_cols after identification, return None
-        if not hasattr(self, 'unique_id_cols') or not self.unique_id_cols:
-            return None, None
-        
-        # Try each unique identifier in order of preference
-        for col in self.unique_id_cols:
-            if col in row_data and pd.notna(row_data[col]) and str(row_data[col]).strip():
-                return col, row_data[col]
-        
-        # If no unique identifier found, return None
-        return None, None
-    
-    def _create_delete_query(self, row_data):
-        """Create a MongoDB delete query for a row using the best available unique identifier."""
-        id_col, id_value = self._get_best_unique_identifier(row_data)
-        
-        if id_col and id_value:
-            return {id_col: id_value}
-        else:
-            # Fallback: use all non-null values as query
-            return {k: v for k, v in row_data.items() if pd.notna(v) and str(v).strip()}
-    
-    def _get_values_for_deletion(self, selected_df, column_name):
-        """Get list of values from a column for deletion, excluding null/empty values."""
-        if column_name in selected_df.columns:
-            return selected_df[column_name].dropna().tolist()
-        return []
-    
-    def _should_have_dropdown(self, column_name):
-        """Determine if a column should have dropdown options based on its type."""
-        # Ensure column types are identified
-        if not hasattr(self, 'category_cols'):
-            self._identify_column_types()
-        
-        # Check if column is in any of the identified dropdown-eligible column lists
-        dropdown_col_lists = [
-            getattr(self, 'category_cols', []),
-            getattr(self, 'vendor_cols', []), 
-            getattr(self, 'location_cols', []),
-            getattr(self, 'check_cols', []),
-            getattr(self, 'serial_cols', [])
-        ]
-        
-        for col_list in dropdown_col_lists:
-            if col_list and column_name in col_list:
-                return True
-        
-        # Check if column exists in Equipment Select Options (this makes any column with select options a dropdown)
-        if (hasattr(self, 'Equipment_select_options_db_df') and 
-            self.Equipment_select_options_db_df is not None and
-            column_name in self.Equipment_select_options_db_df.columns):
-            # Check if there are actually options available for this column
-            options = self.Equipment_select_options_db_df[column_name].dropna().unique()
-            if len(options) > 0 and any(str(opt).strip() for opt in options):
-                return True
-        
-        # Additional pattern-based check for columns that might be missed
-        col_lower = column_name.lower()
-        dropdown_patterns = [
-            'category', 'vendor', 'location', 'status', 'check', 
-            'type', 'brand', 'manufacturer', 'department', 'room',
-            'building', 'floor', 'section', 'area'
-        ]
-        
-        return any(pattern in col_lower for pattern in dropdown_patterns)
-    
-    def _is_checkbox_column(self, column_name):
-        """Determine if a column is a checkbox-type column that should be freely editable."""
-        col_lower = column_name.lower()
-        checkbox_patterns = [
-            'check box', 'checkbox', 'check_box', 'check-box',
-            'checked', 'active', 'enabled', 'disabled', 'status',
-            'yes_no', 'yes/no', 'true_false', 'true/false',
-            'pass_fail', 'pass/fail', 'ok_not_ok', 'ok/not_ok'
-        ]
-        
-        return any(pattern in col_lower for pattern in checkbox_patterns)
-    
-    def _sync_equipment_column_with_select_options(self, col_name):
-        """
-        Sync Equipment Records column values with Equipment Select Options dropdown values.
-        If a column exists in both tables, ensure Equipment Records only contains values 
-        that are available in Equipment Select Options for that column.
-        
-        Args:
-            col_name (str): Name of the column to sync
-        """
-        try:
-            # Check if column exists in both Equipment Records and Equipment Select Options
-            if (hasattr(self, 'df') and col_name in self.df.columns and
-                hasattr(self, 'Equipment_select_options_db_df') and 
-                self.Equipment_select_options_db_df is not None and
-                col_name in self.Equipment_select_options_db_df.columns):
-                
-                # Get valid options from Equipment Select Options
-                valid_options = set(
-                    str(x) for x in self.Equipment_select_options_db_df[col_name].dropna().unique()
-                    if str(x).strip()
-                )
-                
-                if valid_options:
-                    # Get current values in Equipment Records for this column
-                    current_values = self.df[col_name].dropna().unique()
-                    
-                    # Find values that are not in valid options
-                    invalid_values = [
-                        str(val) for val in current_values 
-                        if str(val).strip() and str(val) not in valid_options
-                    ]
-                    
-                    if invalid_values:
-                        # Update Equipment Records to use first valid option for invalid values
-                        first_valid_option = sorted(list(valid_options))[0] if valid_options else ""
-                        
-                        # Update DataFrame in memory
-                        mask = self.df[col_name].isin(invalid_values)
-                        if mask.any():
-                            self.df.loc[mask, col_name] = first_valid_option
-                        
-                        # Update database
-                        for invalid_value in invalid_values:
-                            update_result = self.Equipment_collection.update_many(
-                                {col_name: invalid_value},
-                                {"$set": {col_name: first_valid_option}}
-                            )
-                            if update_result.modified_count > 0:
-                                st.info(f"🔄 Updated {update_result.modified_count} records in '{col_name}' column from '{invalid_value}' to '{first_valid_option}' to match dropdown options.")
-                
-                # Re-identify column types to update dropdown lists
-                self._identify_column_types()
-                
-        except Exception as e:
-            st.warning(f"⚠️ Error syncing column '{col_name}' with select options: {str(e)}")
-    
-    def _sync_all_columns_with_select_options(self):
-        """
-        Sync all matching columns between Equipment Records and Equipment Select Options.
-        This ensures that all Equipment Records columns that have corresponding columns 
-        in Equipment Select Options only contain values from the dropdown options.
-        """
-        if (not hasattr(self, 'Equipment_select_options_db_df') or 
-            self.Equipment_select_options_db_df is None or
-            not hasattr(self, 'df') or self.df is None):
-            st.warning("⚠️ Cannot sync: Equipment Records or Select Options data not available.")
-            return
-        
-        # Find common columns between Equipment Records and Equipment Select Options
-        equipment_columns = set(self.df.columns)
-        select_options_columns = set(self.Equipment_select_options_db_df.columns)
-        common_columns = equipment_columns.intersection(select_options_columns)
-        
-        # Exclude system columns that shouldn't be synced
-        system_columns = {'_id', 'uuid', 'index'}
-        common_columns = common_columns - system_columns
-        
-        if common_columns:
-            st.info(f"🔄 Syncing {len(common_columns)} common columns: {', '.join(sorted(common_columns))}")
-            
-            for col_name in common_columns:
-                self._sync_equipment_column_with_select_options(col_name)
-            
-            st.success(f"✅ Column synchronization completed for {len(common_columns)} columns.")
-        else:
-            st.info("ℹ️ No common columns found between Equipment Records and Equipment Select Options.")
-    
-    def refresh_equipment_data(self):
-        """Force refresh of equipment data from database."""
-        if 'equipment_data_loaded' in st.session_state:
-            del st.session_state['equipment_data_loaded']
-        self._initialize_equipment_data()
-        st.session_state.equipment_data_loaded = True
-
-    def refresh_select_options_data(self):
-        """Force refresh of select options data from database."""
-        st.session_state.force_refresh_select_options = True
-        if 'select_options_id_processed' in st.session_state:
-            del st.session_state['select_options_id_processed']
-        self._initialize_select_options_data()
-
-    def _process_select_options_id_column(self):
-        """Efficiently process ID column for Equipment Select Options (called only once per session)."""
-        # Use MongoDB's _id as a persistent unique index
-        if '_id' in self.Equipment_select_options_db_df.columns:
-            self.Equipment_select_options_db_df.rename(columns={'_id': 'id'}, inplace=True)
-        
-        # Ensure 'index' column is present for deletion logic
-        if 'index' not in self.Equipment_select_options_db_df.columns:
-            self.Equipment_select_options_db_df['index'] = self.Equipment_select_options_db_df.index
-        
-        # Add sequential ID column if it doesn't exist
-        if 'ID' not in self.Equipment_select_options_db_df.columns:
-            # Create sequential ID starting from 1, convert to regular Python int
-            self.Equipment_select_options_db_df['ID'] = [int(i) for i in range(1, len(self.Equipment_select_options_db_df) + 1)]
-            # Batch update records in the database with the new ID
-            updates = []
-            for idx, row in self.Equipment_select_options_db_df.iterrows():
-                if 'index' in row and pd.notna(row['index']):
-                    updates.append({
-                        "filter": {"index": row['index']},
-                        "update": {"$set": {"ID": row['ID']}}
-                    })
-            # Execute batch updates if any
-            if updates:
-                for update in updates:
-                    try:
-                        self.Equipment_select_options.update_one(update["filter"], update["update"], upsert=False)
-                    except Exception:
-                        pass  # Skip failed updates
-        else:
-            # Ensure ID column has proper sequential values
-            if self.Equipment_select_options_db_df['ID'].isna().any() or self.Equipment_select_options_db_df['ID'].duplicated().any():
-                self.Equipment_select_options_db_df['ID'] = [int(i) for i in range(1, len(self.Equipment_select_options_db_df) + 1)]
-                # Batch update records in database
-                updates = []
-                for idx, row in self.Equipment_select_options_db_df.iterrows():
-                    if 'index' in row and pd.notna(row['index']):
-                        updates.append({
-                            "filter": {"index": row['index']},
-                            "update": {"$set": {"ID": row['ID']}}
-                        })
-                # Execute batch updates if any
-                if updates:
-                    for update in updates:
-                        try:
-                            self.Equipment_select_options.update_one(update["filter"], update["update"], upsert=False)
-                        except Exception:
-                            pass  # Skip failed updates
-
-    def _initialize_equipment_data(self):
-        """Initialize Equipment Records data with optimized loading."""
-        # Load Equipment Records data
-        db_records = list(self.Equipment_collection.find({}, {'_id': 0}))
-        self.df = pd.DataFrame(db_records)
-        
-        # Ensure self.df is always a DataFrame (even if empty)
-        self.df = self.df if not self.df.empty else pd.DataFrame()
-        
-        # Only do sorting and column operations if data exists
-        if not self.df.empty:
-            self._identify_column_types()  # Identify columns first
-            
-            # Apply admin-saved column order
-            self.df = self._apply_column_order(self.df, 'equipment')
-            
-            # Basic sorting by first available ID column (lightweight)
-            if hasattr(self, 'unique_id_cols') and self.unique_id_cols:
-                for id_col in self.unique_id_cols:
-                    if id_col in self.df.columns:
-                        try:
-                            if pd.api.types.is_numeric_dtype(self.df[id_col]):
-                                self.df = self.df.sort_values(by=id_col, ascending=True, na_position='last').reset_index(drop=True)
-                            else:
-                                self.df = self.df.sort_values(
-                                    by=id_col, 
-                                    ascending=True, 
-                                    na_position='last', 
-                                    key=lambda x: pd.to_numeric(x, errors='coerce').fillna(float('inf'))
-                                ).reset_index(drop=True)
-                            break
-                        except Exception:
-                            continue
-        else:
-            # If DataFrame is empty, still initialize column types with empty lists
-            self._identify_column_types()
-
-    def _initialize_select_options_data(self):
-        """Initialize Equipment Select Options data with lazy loading."""
-        # Only load if not already cached or if refresh is needed
-        if (not hasattr(self, 'Equipment_select_options_db_df') or 
-            self.Equipment_select_options_db_df is None or
-            st.session_state.get('force_refresh_select_options', False)):
-            
-            self.Equipment_select_options_db_records = list(self.Equipment_select_options.find({}, {'_id': 0}))
-            self.Equipment_select_options_db_df = pd.DataFrame(self.Equipment_select_options_db_records)
-            
-            # Clear refresh flag if it was set
-            if 'force_refresh_select_options' in st.session_state:
-                del st.session_state['force_refresh_select_options']
-
-    def _prepare_display_data_select_options(self):
-        """
-        Prepare Equipment Select Options data for display by applying column order.
-        Returns:
-            pandas.DataFrame: DataFrame with columns in saved order
-        """
-        if not hasattr(self, 'Equipment_select_options_db_df') or self.Equipment_select_options_db_df is None:
-            return pd.DataFrame()
-        
-        # Apply column order and return the prepared data
-        return self._apply_column_order(self.Equipment_select_options_db_df, 'select_options')
-
-    def _load_and_sync_data_on_startup(self):
-        """
-        Load Equipment Records data and auto-sync columns with Equipment Select Options on startup.
-        This ensures dropdown consistency without showing UI messages during startup.
-        """
-        # Load Equipment Records data
-        db_records = list(self.Equipment_collection.find({}, {'_id': 0}))
-        self.df = pd.DataFrame(db_records)
-        
-        # Auto-sync columns between Equipment Records and Equipment Select Options on startup
-        # This ensures dropdown consistency without showing UI messages during startup
-        try:
-            if not self.df.empty and not self.Equipment_select_options_db_df.empty:
-                # Find common columns (excluding system columns)
-                equipment_columns = set(self.df.columns)
-                select_options_columns = set(self.Equipment_select_options_db_df.columns)
-                common_columns = equipment_columns.intersection(select_options_columns)
-                system_columns = {'_id', 'uuid', 'index'}
-                common_columns = common_columns - system_columns
-                
-                # Silently sync without UI messages during startup
-                for col_name in common_columns:
-                    if (col_name in self.Equipment_select_options_db_df.columns):
-                        valid_options = set(
-                            str(x) for x in self.Equipment_select_options_db_df[col_name].dropna().unique()
-                            if str(x).strip()
-                        )
-                        if valid_options:
-                            current_values = self.df[col_name].dropna().unique()
-                            invalid_values = [
-                                str(val) for val in current_values 
-                                if str(val).strip() and str(val) not in valid_options
-                            ]
-                            if invalid_values:
-                                first_valid_option = sorted(list(valid_options))[0]
-                                mask = self.df[col_name].isin(invalid_values)
-                                if mask.any():
-                                    self.df.loc[mask, col_name] = first_valid_option
-                                # Update database silently
-                                for invalid_value in invalid_values:
-                                    self.Equipment_collection.update_many(
-                                        {col_name: invalid_value},
-                                        {"$set": {col_name: first_valid_option}}
-                                    )
-        except Exception:
-            # Silent error handling during startup
-            pass
-    
-    
-    
-    def create_sidebar_filters(self, prefix=""):
-        """
-        Create sidebar filters where each filter's options are dependent on previous filter selections.
-        """
-        def _key(name):
-            return f"{prefix}_{name}" if prefix else name
-
-        st.sidebar.header(f"🔍 {prefix}_Filters")
-        filter_columns = {}
-
-        # Start with full DataFrame
-        filtered_df = self.df.copy()
-
-        # Category filter
-        if self.category_cols:
-            category_col = self.category_cols[0]
-            categories = ['All'] + sorted([cat for cat in filtered_df[category_col].dropna().unique() if str(cat).strip() != ''])
-            selected_category = st.sidebar.selectbox(f"Filter by {category_col}", categories, key=_key('category'))
-            filter_columns['category'] = selected_category
-            if selected_category != 'All':
-                filtered_df = filtered_df[filtered_df[category_col] == selected_category]
-
-        # Vendor filter
-        if self.vendor_cols:
-            vendor_col = self.vendor_cols[0]
-            vendors = ['All'] + sorted([vendor for vendor in filtered_df[vendor_col].dropna().unique() if str(vendor).strip() != ''])
-            selected_vendor = st.sidebar.selectbox(f"Filter by {vendor_col}", vendors, key=_key('vendor'))
-            filter_columns['vendor'] = selected_vendor
-            if selected_vendor != 'All':
-                filtered_df = filtered_df[filtered_df[vendor_col] == selected_vendor]
-
-        # Location filter
-        if self.location_cols:
-            location_col = self.location_cols[0]
-            locations = ['All'] + sorted([loc for loc in filtered_df[location_col].dropna().unique() if str(loc).strip() != ''])
-            selected_location = st.sidebar.selectbox(f"Filter by {location_col}", locations, key=_key('location'))
-            filter_columns['location'] = selected_location
-            if selected_location != 'All':
-                filtered_df = filtered_df[filtered_df[location_col] == selected_location]
-
-        # Check status filter
-        if self.check_cols:
-            check_col = self.check_cols[0]
-            check_statuses = ['All'] + sorted([str(check) for check in filtered_df[check_col].dropna().unique()])
-            selected_check = st.sidebar.selectbox(f"Filter by {check_col}", check_statuses, key=_key('check'))
-            filter_columns['check'] = selected_check
-            if selected_check != 'All':
-                filtered_df = filtered_df[filtered_df[check_col].astype(str) == selected_check]
-
-        # Serial filter
-        if self.serial_cols:
-            serial_col = self.serial_cols[0]
-            serials = ['All'] + sorted([str(serial) for serial in filtered_df[serial_col].dropna().unique() if str(serial).strip() != ''])
-            selected_serial = st.sidebar.selectbox(f"Filter by {serial_col}", serials, key=_key('serial'))
-            filter_columns['serial'] = selected_serial
-            if selected_serial != 'All':
-                filtered_df = filtered_df[filtered_df[serial_col] == selected_serial]
-
-        # Text search
-        search_text = st.sidebar.text_input(f"🔍 Search in: {', '.join(self.search_cols[:3])}", key=_key('search'))
-
-        return filter_columns, search_text
-    
-    def apply_filters(self, filter_columns, search_text):
-        """
-        Apply filters to the DataFrame, making each filter dependent on previous selections.
-        Args:
-            filter_columns (dict): Dictionary of filter selections
-            search_text (str): Text to search for
-        """
-        self.filtered_df = self.df.copy()
-
-        # Apply filters in order, each time narrowing the DataFrame for subsequent filters
-        if self.category_cols and 'category' in filter_columns and filter_columns['category'] != 'All':
-            self.filtered_df = self.filtered_df[self.filtered_df[self.category_cols[0]] == filter_columns['category']]
-
-        if self.vendor_cols and 'vendor' in filter_columns and filter_columns['vendor'] != 'All':
-            self.filtered_df = self.filtered_df[self.filtered_df[self.vendor_cols[0]] == filter_columns['vendor']]
-
-        if self.location_cols and 'location' in filter_columns and filter_columns['location'] != 'All':
-            self.filtered_df = self.filtered_df[self.filtered_df[self.location_cols[0]] == filter_columns['location']]
-
-        if self.check_cols and 'check' in filter_columns and filter_columns['check'] != 'All':
-            self.filtered_df = self.filtered_df[self.filtered_df[self.check_cols[0]].astype(str) == filter_columns['check']]
-
-        if self.serial_cols and 'serial' in filter_columns and filter_columns['serial'] != 'All':
-            self.filtered_df = self.filtered_df[self.filtered_df[self.serial_cols[0]] == filter_columns['serial']]
-
-        # Apply text search last
-        if search_text and self.search_cols:
-            mask = pd.Series([False] * len(self.filtered_df))
-            for col in self.search_cols:
-                if col in self.filtered_df.columns:
-                    mask |= self.filtered_df[col].astype(str).str.contains(search_text, case=False, na=False)
-            self.filtered_df = self.filtered_df[mask]
-    
-    # def configure_aggrid(self):
-    #     """
-    #     Configure AgGrid with dynamic column settings.
-        
-    #     Returns:
-    #         dict: Grid options for AgGrid
-    #     """
-    #     gb = GridOptionsBuilder.from_dataframe(self.filtered_df)
-        
-    #     # Get user permissions
-    #     permissions = self.get_user_permissions()
-        
-    #     # Enable editing based on permissions
-    #     gb.configure_default_column(
-    #         editable=permissions["can_edit"], 
-    #         groupable=True, 
-    #         resizable=True, 
-    #         sortable=True, 
-    #         filter=True
-    #     )
-        
-    #     # Configure specific columns based on what exists with flexible widths
-    #     for col in self.filtered_df.columns:
-    #         col_lower = col.lower()
-            
-    #         # Calculate dynamic width based on column name length and content
-    #         col_name_length = len(col)
-    #         min_width = max(80, col_name_length * 8)  # Minimum width based on column name
-            
-    #         # ID columns - make read-only with smaller width
-    #         if any(term in col_lower for term in ['id', '_id']):
-    #             gb.configure_column(col, editable=False, width=min_width, minWidth=60, maxWidth=120)
-            
-    #         # Short text columns
-    #         elif any(term in col_lower for term in ['category', 'vendor', 'location', 'check', 'etag']):
-    #             gb.configure_column(col, width=max(min_width, 150), minWidth=100, maxWidth=200, wrapText=True, autoHeight=True)
-            
-    #         # Medium text columns
-    #         elif any(term in col_lower for term in ['model', 'serial']):
-    #             gb.configure_column(col, width=max(min_width, 180), minWidth=120, maxWidth=250, wrapText=True, autoHeight=True)
-            
-    #         # Long text columns with tooltips
-    #         elif any(term in col_lower for term in ['description', 'comments']):
-    #             gb.configure_column(col, width=max(min_width, 250), minWidth=150, maxWidth=400, tooltipField=col, wrapText=True, autoHeight=True)
-            
-    #         # Date columns
-    #         elif any(term in col_lower for term in ['date', 'cal']):
-    #             gb.configure_column(col, width=max(min_width, 130), minWidth=100, maxWidth=160)
-            
-    #         # Numeric columns
-    #         elif any(term in col_lower for term in ['value', 'price', 'cost', 'year']):
-    #             gb.configure_column(col, width=max(min_width, 120), minWidth=80, maxWidth=150)
-            
-    #         # Default for other columns
-    #         else:
-    #             gb.configure_column(col, width=max(min_width, 160), minWidth=100, maxWidth=300, wrapText=True, autoHeight=True)
-        
-    #     # Enable selection
-    #     gb.configure_selection(selection_mode="multiple", use_checkbox=True)
-        
-    #     # Enable pagination
-    #     gb.configure_pagination(enabled=True, paginationPageSize=20)
-        
-    #     # Enable filtering and sorting with better column management
-    #     gb.configure_side_bar(filters_panel=True, defaultToolPanel='filters')
-        
-    #     # Configure grid options for better responsiveness
-    #     gb.configure_grid_options(
-    #         suppressColumnVirtualisation=False,
-    #         suppressRowVirtualisation=False,
-    #         enableRangeSelection=True,
-    #         rowSelection='multiple',
-    #         animateRows=True,
-    #         suppressMovableColumns=False,
-    #         enableCellTextSelection=True
-    #     )
-        
-    #     return gb.build()
-    
-    # def display_data_grid(self):
-    #     """Display the main data grid using AgGrid."""
-    #     grid_options = self.configure_aggrid()
-        
-    #     # Display the grid
-    #     st.subheader("📊 Equipment Data Grid")
-    #     st.caption("💡 You can edit cells directly, resize columns, use filters, sort columns, and select multiple rows")
-        
-    #     grid_response = AgGrid(
-    #         self.filtered_df,
-    #         gridOptions=grid_options,
-    #         data_return_mode=DataReturnMode.FILTERED_AND_SORTED,
-    #         update_mode=GridUpdateMode.MODEL_CHANGED,
-    #         allow_unsafe_jscode=True,
-    #         fit_columns_on_grid_load=False,
-    #         height=600,
-    #         theme='streamlit',
-    #         enable_enterprise_modules=False,
-    #         reload_data=False
-    #     )
-        
-    #     return grid_response
-    
-    def handle_data_updates(self, grid_response):
-        """Handle data updates and save functionality."""
-        updated_df = grid_response['data']
-        
-        # Check if data has been modified
-        if not updated_df.equals(self.filtered_df):
-            st.success("✅ Data has been modified in the grid!")
-            
-            # Option to save changes
-            col1, col2 = st.columns([1, 4])
-            with col1:
-                if st.button("💾 Save Changes to CSV"):
-                    try:
-                        updated_df.to_csv(self.csv_filename, index=False, encoding='utf-8')
-                        st.success("✅ Changes saved successfully!")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"❌ Error saving file: {str(e)}")
-    
-    def display_selected_items(self, grid_response):
-        """Display selected items in an expandable format."""
-        selected_rows = grid_response['selected_rows']
-        if not selected_rows:
-            return
-        
-        st.subheader(f"📋 Selected Items ({len(selected_rows)})")
-        selected_df = pd.DataFrame(selected_rows)
-        
-        # Display selected items in a more readable format
-        for idx, row in selected_df.iterrows():
-            # Create a dynamic title using available columns
-            title_parts = []
-            if self.category_cols:
-                title_parts.append(f"{row.get(self.category_cols[0], 'Unknown')}")
-            
-            model_cols = [col for col in self.available_columns if 'model' in col.lower()]
-            if model_cols:
-                title_parts.append(f"{row.get(model_cols[0], 'Unknown Model')}")
-            
-            serial_cols = [col for col in self.available_columns if 'serial' in col.lower()]
-            if serial_cols:
-                title_parts.append(f"(Serial: {row.get(serial_cols[0], 'N/A')})")
-            
-            title = "🔧 " + " - ".join(title_parts) if title_parts else f"🔧 Item {idx + 1}"
-            
-            with st.expander(title):
-                col1, col2 = st.columns(2)
-                
-                # Dynamically display all available fields
-                all_cols = list(row.index)
-                mid_point = len(all_cols) // 2
-                
-                with col1:
-                    for col in all_cols[:mid_point]:
-                        if pd.notna(row[col]) and str(row[col]).strip():
-                            st.write(f"**{col}:** {row[col]}")
-                
-                with col2:
-                    for col in all_cols[mid_point:]:
-                        if pd.notna(row[col]) and str(row[col]).strip():
-                            st.write(f"**{col}:** {row[col]}")
-        
-        self.display_bulk_operations(selected_df)
-    
-    def display_bulk_operations(self, selected_df):
-        """Display bulk operations for selected items."""
-        permissions = self.auth_manager.get_user_permissions()
-        
-        st.subheader("🔄 Bulk Operations")
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            if permissions["can_export"]:
-                if st.button("📤 Export Selected to CSV"):
-                    csv = selected_df.to_csv(index=False)
-                    st.download_button(
-                        label="Download Selected Items",
-                        data=csv,
-                        file_name="selected_equipment.csv",
-                        mime="text/csv"
-                    )
-            else:
-                st.info("🚫 Export not allowed for your role")
-        
-        with col2:
-            if permissions["can_edit"] and self.location_cols:
-                new_location = st.selectbox("Update Location for Selected", 
-                                          [''] + [loc for loc in self.df[self.location_cols[0]].dropna().unique() if str(loc).strip()])
-                if st.button("📍 Update Location") and new_location:
-                    st.warning("Note: This would update the location in a real implementation")
-            else:
-                if not permissions["can_edit"]:
-                    st.info("🚫 Edit not allowed for your role")
-                else:
-                    st.info("No location column found")
-        
-        with col3:
-            if permissions["can_delete"]:
-                if st.button("🗑️ Mark as Retired"):
-                    st.warning("Note: This would mark items as retired in a real implementation")
-            else:
-                st.info("🚫 Delete not allowed for your role")
-    
-    def display_footer(self):
-        """Display the application footer."""
-        st.markdown("---")
-        
-        st.markdown("**📋 ACT Lab Equipment Management System**")
-    def _set_dropdown_columns(self, column_config):
-        """
-        Set dropdown options for category, vendor, location, check/status, and serial columns in column_config.
-        """
-        # Always use the latest Equipment Select Options for category
-        self.Equipment_select_options_csv = self.Equipment_select_options_db_df.copy()
-        # Helper to get options from Equipment Select Options DB
-        def get_options(col):
-            if (
-                self.Equipment_select_options_csv is not None
-                and col in self.Equipment_select_options_csv.columns
-            ):
-                # Use only unique, non-empty, sorted values from Equipment Select Options
-                return sorted([
-                    str(x)
-                    for x in self.Equipment_select_options_csv[col].dropna().unique()
-                    if str(x).strip()
-                ])
-            else:
-                return []
-
-        # Category
-        if self.category_cols:
-            col = self.category_cols[0]
-            # Always update options from Equipment Select Options
-            options = get_options(col)
-            column_config[col]["options"] = options
-            column_config[col]["editable"] = True
-            column_config[col]["type"] = "categorical"
-        # Vendor
-        if self.vendor_cols:
-            col = self.vendor_cols[0]
-            options = get_options(col)
-            column_config[col]["type"] = "categorical"
-            column_config[col]["options"] = options
-            column_config[col]["editable"] = True
-        # Location
-        if self.location_cols:
-            col = self.location_cols[0]
-            options = get_options(col)
-            column_config[col]["type"] = "categorical"
-            column_config[col]["options"] = options
-            column_config[col]["editable"] = True
-        # Check/Status
-        if self.check_cols:
-            col = self.check_cols[0]
-            options = get_options(col)
-            column_config[col]["type"] = "categorical"
-            column_config[col]["options"] = options
-            column_config[col]["editable"] = True
-        # Serial (optional, usually unique, but can restrict to existing)
-        if self.serial_cols:
-            col = self.serial_cols[0]
-            options = get_options(col)
-            column_config[col]["options"] = options
-            column_config[col]["editable"] = True
-
-        for col in [c for c in [self.category_cols, self.vendor_cols, self.location_cols] if c]:
-            colname = col[0]
-            opts = column_config.get(colname, {}).get("options", None)
-            if opts:
-                self.display_df[colname] = pd.Categorical(self.display_df[colname], categories=opts)
-
-    def delete_column_from_equeipment_records_db(self):
-        # Button to delete a column from the DB
-        with st.expander("🗑️ Delete Column from Equipment DB"):
-            # Get available columns for deletion (exclude essential columns)
-            available_columns = [col for col in self.df.columns if col not in ['id', '_id']]
-            
-            if available_columns:
-                col_to_delete = st.selectbox(
-                    "Select Column to Delete:",
-                    available_columns,
-                    key="delete_col_select"
-                )
-                
-                # Initialize confirmation state if not exists
-                if 'confirm_delete_column' not in st.session_state:
-                    st.session_state.confirm_delete_column = False
-                if 'column_to_confirm_delete' not in st.session_state:
-                    st.session_state.column_to_confirm_delete = None
-                
-                # First click - show confirmation
-                if not st.session_state.confirm_delete_column:
-                    if st.button("🗑️ Delete Column", key="delete_col_btn", type="primary"):
-                        if col_to_delete:
-                            st.session_state.confirm_delete_column = True
-                            st.session_state.column_to_confirm_delete = col_to_delete
-                            st.rerun()
-                
-                # Show confirmation dialog
-                if st.session_state.confirm_delete_column and st.session_state.column_to_confirm_delete:
-                    st.warning(f"⚠️ **Are you sure you want to delete the column '{st.session_state.column_to_confirm_delete}'?**")
-                    st.error("🚨 **This action cannot be undone!** The column will be permanently removed from all equipment records.")
-                    
-                    col1, col2, col3 = st.columns([1, 1, 2])
-                    
-                    with col1:
-                        if st.button("✅ Yes, Delete", key="confirm_delete_btn", type="primary"):
-                            try:
-                                modified_count = self.delete_column_from_db(st.session_state.column_to_confirm_delete)
-                                st.success(f"✅ Successfully deleted column '{st.session_state.column_to_confirm_delete}' from {modified_count} records.")
-                                # Reset confirmation state
-                                st.session_state.confirm_delete_column = False
-                                st.session_state.column_to_confirm_delete = None
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"❌ Error deleting column: {str(e)}")
-                                # Reset confirmation state on error
-                                st.session_state.confirm_delete_column = False
-                                st.session_state.column_to_confirm_delete = None
-                    
-                    with col2:
-                        if st.button("❌ Cancel", key="cancel_delete_btn"):
-                            # Reset confirmation state
-                            st.session_state.confirm_delete_column = False
-                            st.session_state.column_to_confirm_delete = None
-                            st.rerun()
-                    
-                    with col3:
-                        st.info("💡 Choose wisely - deleted columns cannot be recovered!")
-                        
-            else:
-                st.info("No columns available for deletion")
-
-        # Show download button only for admin
-        if st.session_state.get("user_role") == "admin":
-            st.markdown("### Admin Downloads")
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                csv = self.display_df.to_csv(index=False)
-                st.download_button(
-                    label="📤 Download All Records",
-                    data=csv,
-                    file_name="equipment_records.csv",
-                    mime="text/csv"
-                )
-            
-            st.markdown("### Web Management")
-            
-            # Column and Filter Order Management under Admin Downloads
-            self.save_column_order_ui()
-            self.save_filter_order_ui()
-        
-    def save_column_order_ui(self):
-        """UI for admin to save the current Equipment column order"""
-        if self._is_admin():
-            with st.expander("💾 Save Equipment Column Order"):
-                st.info("💡 Configure your preferred Equipment column order below and save it.")
-                
-                # Show current saved orders for Equipment only
-                equipment_default = list(self.display_df.columns) if hasattr(self, 'display_df') and not self.display_df.empty else []
-                equipment_order = self._load_column_order('equipment', equipment_default)
-                
-                st.markdown("**Equipment Table Column Order:**")
-                if equipment_default:
-                    st.markdown("Current columns in data:")
-                    current_equipment_display = ', '.join(equipment_default[:5]) + ('...' if len(equipment_default) > 5 else '')
-                    st.text(current_equipment_display)
-                    
-                    # Allow user to reorder columns
-                    st.markdown("**Drag to reorder or manually edit the order:**")
-                    equipment_order_input = st.text_area(
-                        "Column order (one per line or comma-separated):",
-                        value='\n'.join(equipment_order) if equipment_order else '\n'.join(equipment_default),
-                        height=150,
-                        key="equipment_column_order"
-                    )
-                    
-                    if st.button("💾 Save Equipment Column Order", key="save_equipment_order_btn"):
-                        # Parse the input
-                        if '\n' in equipment_order_input:
-                            new_order = [col.strip() for col in equipment_order_input.split('\n') if col.strip()]
-                        else:
-                            new_order = [col.strip() for col in equipment_order_input.split(',') if col.strip()]
-                                
-                        # Validate that all columns exist
-                        invalid_columns = [col for col in new_order if col not in equipment_default]
-                        missing_columns = [col for col in equipment_default if col not in new_order]
-                        
-                        if invalid_columns:
-                            st.error(f"❌ Invalid columns: {', '.join(invalid_columns)}")
-                        elif missing_columns:
-                            st.warning(f"⚠️ Missing columns (will be added at end): {', '.join(missing_columns)}")
-                            new_order.extend(missing_columns)
-                            self._save_column_order('equipment', new_order)
-                            st.success("✅ Equipment columns order saved successfully!")
-                            st.rerun()
-                        else:
-                            self._save_column_order('equipment', new_order)
-                            st.success("✅ Equipment columns order saved successfully!")
-                            st.rerun()
-                else:
-                    st.info("No Equipment data available")
-                
-                st.markdown("📋 **Instructions:** Edit the column order in the text area above (one column name per line), then click Save.")
-
-    def save_select_options_column_order_ui(self):
-        """UI for admin to save the current Select Options column order"""
-        if self._is_admin():
-            with st.expander("💾 Save Select Options Column Order"):
-                st.info("💡 Configure your preferred Select Options column order below and save it.")
-                
-                # Show current saved orders for Select Options only
-                select_options_default = list(self.Equipment_select_options_db_df.columns) if hasattr(self, 'Equipment_select_options_db_df') and not self.Equipment_select_options_db_df.empty else []
-                select_options_order = self._load_column_order('select_options', select_options_default)
-                
-                st.markdown("**Select Options Table Column Order:**")
-                if select_options_default:
-                    st.markdown("Current columns in data:")
-                    current_select_options_display = ', '.join(select_options_default[:5]) + ('...' if len(select_options_default) > 5 else '')
-                    st.text(current_select_options_display)
-                    
-                    # Allow user to reorder columns
-                    st.markdown("**Drag to reorder or manually edit the order:**")
-                    select_options_order_input = st.text_area(
-                        "Column order (one per line or comma-separated):",
-                        value='\n'.join(select_options_order) if select_options_order else '\n'.join(select_options_default),
-                        height=150,
-                        key="select_options_column_order"
-                    )
-                    
-                    if st.button("💾 Save Select Options Column Order", key="save_select_options_order_btn"):
-                        # Parse the input
-                        if '\n' in select_options_order_input:
-                            new_order = [col.strip() for col in select_options_order_input.split('\n') if col.strip()]
-                        else:
-                            new_order = [col.strip() for col in select_options_order_input.split(',') if col.strip()]
-                        
-                        # Validate that all columns exist
-                        invalid_columns = [col for col in new_order if col not in select_options_default]
-                        missing_columns = [col for col in select_options_default if col not in new_order]
-                        
-                        if invalid_columns:
-                            st.error(f"❌ Invalid columns: {', '.join(invalid_columns)}")
-                        elif missing_columns:
-                            st.warning(f"⚠️ Missing columns (will be added at end): {', '.join(missing_columns)}")
-                            new_order.extend(missing_columns)
-                            self._save_column_order('select_options', new_order)
-                            st.success("✅ Select Options columns order saved successfully!")
-                            st.rerun()
-                        else:
-                            self._save_column_order('select_options', new_order)
-                            st.success("✅ Select Options columns order saved successfully!")
-                            st.rerun()
-                else:
-                    st.info("No Select Options data available")
-                
-                st.markdown("📋 **Instructions:** Edit the column order in the text area above (one column name per line), then click Save.")
-
-    def _save_filter_order(self, filter_order):
-        """
-        Save filter order preference to a JSON file.
-        Args:
-            filter_order (list): List of filter column names in desired order
-        Returns:
-            bool: Success status
-        """
-        try:
-            filter_order_file = Path("filter_order_preferences.json")
-            
-            preferences = {}
-            if filter_order_file.exists():
-                with open(filter_order_file, 'r') as f:
-                    preferences = json.load(f)
-            
-            preferences['equipment_filters'] = filter_order
-            
-            with open(filter_order_file, 'w') as f:
-                json.dump(preferences, f, indent=2)
-            
-            return True
-        except Exception as e:
-            st.error(f"Error saving filter order: {str(e)}")
-            return False
-    
-    def save_select_options_filter_order_ui(self):
-        """UI for admin to save the current Equipment Select Options Filter order"""
-        if self._is_admin():
-            with st.expander("🔧 Save Equipment Select Options Filter Order"):
-                # Get excluded filter columns (same as used in Equipment_select_options_Filters)
-                excluded_filter_cols = ["ID", "check", "uuid", "index"]  # You can modify this list as needed
-                
-                # Get ALL filterable columns from the current dataset
-                all_filterable_columns = []
-                filter_column_mapping = {}
-                
-                if hasattr(self, 'Equipment_select_options_db_df') and self.Equipment_select_options_db_df is not None and not self.Equipment_select_options_db_df.empty:
-                    # Get all columns except excluded ones
-                    for col in self.Equipment_select_options_db_df.columns:
-                        if col not in excluded_filter_cols:
-                            all_filterable_columns.append(col)
-                            filter_column_mapping[col] = col
-                
-                # Show current saved filter order
-                current_filter_order = self._load_select_options_filter_order(all_filterable_columns)
-                
-                if all_filterable_columns:
-                    # Allow user to configure excluded columns
-                    excluded_cols_input = st.text_input(
-                        "Excluded columns (comma-separated):",
-                        value=', '.join(excluded_filter_cols),
-                        help="Enter column names that should NOT appear as filters",
-                        key="excluded_select_options_filter_cols_input"
-                    )
-                    
-                    # Update excluded columns and refresh available columns
-                    if excluded_cols_input.strip():
-                        new_excluded_cols = [col.strip() for col in excluded_cols_input.split(',') if col.strip()]
-                        # Update the available columns based on new exclusions
-                        updated_filterable_columns = []
-                        if hasattr(self, 'Equipment_select_options_db_df') and self.Equipment_select_options_db_df is not None and not self.Equipment_select_options_db_df.empty:
-                            for col in self.Equipment_select_options_db_df.columns:
-                                if col not in new_excluded_cols:
-                                    updated_filterable_columns.append(col)
-                        
-                        # Update current filter order to remove newly excluded columns
-                        current_filter_order = [col for col in current_filter_order if col not in new_excluded_cols]
-                        all_filterable_columns = updated_filterable_columns
-                    
-                    # Allow user to reorder filters
-                    st.markdown("---")
-                    st.markdown("**📋 Reorder Filters:**")
-                    filter_order_input = st.text_area(
-                        "Filter order (one column per line or comma-separated):",
-                        value='\n'.join(current_filter_order) if current_filter_order else '\n'.join(all_filterable_columns),
-                        height=200,
-                        key="select_options_filter_order"
-                    )
-                    
-                    if st.button("💾 Save Equipment Select Options Filter Order", key="save_select_options_filter_order_btn"):
-                        # Parse the input
-                        if '\n' in filter_order_input:
-                            new_order = [f.strip() for f in filter_order_input.split('\n') if f.strip()]
-                        else:
-                            new_order = [f.strip() for f in filter_order_input.split(',') if f.strip()]
-                        
-                        # Validate that all filters exist in available columns
-                        invalid_filters = [f for f in new_order if f not in all_filterable_columns]
-                        missing_filters = [f for f in all_filterable_columns if f not in new_order]
-                        
-                        if invalid_filters:
-                            st.error(f"❌ Invalid column names: {', '.join(invalid_filters)}")
-                            st.info(f"📋 Available columns: {', '.join(all_filterable_columns)}")
-                        elif missing_filters:
-                            st.warning(f"⚠️ Missing columns (will be added at end): {', '.join(missing_filters)}")
-                            new_order.extend(missing_filters)
-                            
-                            # Also save the updated excluded columns if they changed
-                            if excluded_cols_input.strip():
-                                new_excluded_cols = [col.strip() for col in excluded_cols_input.split(',') if col.strip()]
-                                # Save excluded columns to a separate preference file
-                                try:
-                                    excluded_cols_file = Path("excluded_select_options_filter_columns.json")
-                                    with open(excluded_cols_file, 'w') as f:
-                                        json.dump({"excluded_columns": new_excluded_cols}, f, indent=2)
-                                except Exception as e:
-                                    st.warning(f"⚠️ Could not save excluded columns preference: {str(e)}")
-                            
-                            self._save_select_options_filter_order(new_order)
-                            st.success("✅ Equipment Select Options filter order saved successfully!")
-                            st.rerun()
-                        else:
-                            # Also save the updated excluded columns if they changed
-                            if excluded_cols_input.strip():
-                                new_excluded_cols = [col.strip() for col in excluded_cols_input.split(',') if col.strip()]
-                                # Save excluded columns to a separate preference file
-                                try:
-                                    excluded_cols_file = Path("excluded_select_options_filter_columns.json")
-                                    with open(excluded_cols_file, 'w') as f:
-                                        json.dump({"excluded_columns": new_excluded_cols}, f, indent=2)
-                                except Exception as e:
-                                    st.warning(f"⚠️ Could not save excluded columns preference: {str(e)}")
-                            
-                            self._save_select_options_filter_order(new_order)
-                            st.success("✅ Equipment Select Options filter order saved successfully!")
-                            st.rerun()
-                else:
-                    st.info("No data available to determine filterable columns")
-                
-                st.markdown("📋 **Instructions:**")
-                st.markdown("1. **Configure Excluded Columns**: Add/remove columns from the excluded list")
-                st.markdown("2. **Reorder Filters**: Edit the filter order (one column per line or comma-separated)")
-                st.markdown("3. **Save**: Click 'Save Equipment Select Options Filter Order' to apply changes")
-                st.markdown("4. **Result**: Filter dropdowns will appear in your custom order, excluding specified columns")
-
-    def _load_select_options_filter_order(self, default_filters):
-        """
-        Load saved filter order preference for Equipment Select Options.
-        Args:
-            default_filters (list): Default filter order to use if no saved preference
-        Returns:
-            list: Ordered list of filter names
-        """
-        try:
-            filter_order_file = Path("filter_order_preferences.json")
-            
-            if filter_order_file.exists():
-                with open(filter_order_file, 'r') as f:
-                    preferences = json.load(f)
-                
-                if 'select_options_filters' in preferences:
-                    saved_order = preferences['select_options_filters']
-                    # Ensure all current filters are included (in case new filters were added)
-                    missing_filters = [f for f in default_filters if f not in saved_order]
-                    # Add any missing filters at the end
-                    return saved_order + missing_filters
-            
-            # Return default order if no saved preference
-            return default_filters
-        except Exception as e:
-            # Return default order if there's an error loading preferences
-            return default_filters
-
-    def _save_select_options_filter_order(self, filter_order):
-        """
-        Save filter order preference for Equipment Select Options to a JSON file.
-        Args:
-            filter_order (list): List of filter column names in desired order
-        Returns:
-            bool: Success status
-        """
-        try:
-            filter_order_file = Path("filter_order_preferences.json")
-            
-            preferences = {}
-            if filter_order_file.exists():
-                with open(filter_order_file, 'r') as f:
-                    preferences = json.load(f)
-            
-            preferences['select_options_filters'] = filter_order
-            
-            with open(filter_order_file, 'w') as f:
-                json.dump(preferences, f, indent=2)
-            
-            return True
-        except Exception as e:
-            st.error(f"Error saving select options filter order: {str(e)}")
-            return False
-
-    def download_select_options_ui(self):
-        """UI for downloading Equipment Select Options as CSV"""
-        if hasattr(self, 'Equipment_select_options_db_df') and not self.Equipment_select_options_db_df.empty:
-            select_options_csv = self.Equipment_select_options_db_df.to_csv(index=False)
-            st.download_button(
-                label="📥 Download Equipment Select Options",
-                data=select_options_csv,
-                file_name="equipment_select_options.csv",
-                mime="text/csv",
-                key="download_select_options_all"
-            )
-        else:
-            st.info("No Equipment Select Options data available for download")
-
-    def _load_filter_order(self, default_filters):
-        """
-        Load saved filter order preference.
-        Args:
-            default_filters (list): Default filter order to use if no saved preference
-        Returns:
-            list: Ordered list of filter names
-        """
-        try:
-            filter_order_file = Path("filter_order_preferences.json")
-            
-            if filter_order_file.exists():
-                with open(filter_order_file, 'r') as f:
-                    preferences = json.load(f)
-                
-                if 'equipment_filters' in preferences:
-                    saved_order = preferences['equipment_filters']
-                    # Ensure all current filters are included (in case new filters were added)
-                    missing_filters = [f for f in default_filters if f not in saved_order]
-                    # Add any missing filters at the end
-                    return saved_order + missing_filters
-            
-            # Return default order if no saved preference
-            return default_filters
-        except Exception as e:
-            # Return default order if there's an error loading preferences
-            return default_filters
-
-    def _load_excluded_filter_columns(self, default_excluded):
-        """
-        Load saved excluded filter columns preference.
-        Args:
-            default_excluded (list): Default excluded columns to use if no saved preference
-        Returns:
-            list: List of column names to exclude from filters
-        """
-        try:
-            excluded_cols_file = Path("excluded_filter_columns.json")
-            
-            if excluded_cols_file.exists():
-                with open(excluded_cols_file, 'r') as f:
-                    preferences = json.load(f)
-                
-                if 'excluded_columns' in preferences:
-                    return preferences['excluded_columns']
-            
-            # Return default excluded columns if no saved preference
-            return default_excluded
-        except Exception as e:
-            # Return default excluded columns if there's an error loading preferences
-            return default_excluded
-
-    def save_filter_order_ui(self):
-        """UI for admin to save the current Equipment Filter order"""
-        if self._is_admin():
-            with st.expander("🔧 Save Equipment Filter Order"):
-                # Get excluded filter columns (same as used in Equipment_Filters)
-                excluded_filter_cols = ["ID", "check", "uuid"]  # You can modify this list as needed
-                
-                # Get ALL filterable columns from the current dataset
-                all_filterable_columns = []
-                filter_column_mapping = {}
-                
-                if hasattr(self, 'df') and self.df is not None and not self.df.empty:
-                    # Get all columns except excluded ones
-                    for col in self.df.columns:
-                        if col not in excluded_filter_cols:
-                            all_filterable_columns.append(col)
-                            filter_column_mapping[col] = col
-                
-                # Show current saved filter order
-                current_filter_order = self._load_filter_order(all_filterable_columns)
-                
-                if all_filterable_columns:
-                    # Allow user to configure excluded columns
-                    excluded_cols_input = st.text_input(
-                        "Excluded columns (comma-separated):",
-                        value=', '.join(excluded_filter_cols),
-                        help="Enter column names that should NOT appear as filters",
-                        key="excluded_filter_cols_input"
-                    )
-                    
-                    # Update excluded columns and refresh available columns
-                    if excluded_cols_input.strip():
-                        new_excluded_cols = [col.strip() for col in excluded_cols_input.split(',') if col.strip()]
-                        # Update the available columns based on new exclusions
-                        updated_filterable_columns = []
-                        if hasattr(self, 'df') and self.df is not None and not self.df.empty:
-                            for col in self.df.columns:
-                                if col not in new_excluded_cols:
-                                    updated_filterable_columns.append(col)
-                        
-                        # Update current filter order to remove newly excluded columns
-                        current_filter_order = [col for col in current_filter_order if col not in new_excluded_cols]
-                        all_filterable_columns = updated_filterable_columns
-                    
-                    # Allow user to reorder filters
-                    st.markdown("---")
-                    st.markdown("**📋 Reorder Filters:**")
-                    filter_order_input = st.text_area(
-                        "Filter order (one column per line or comma-separated):",
-                        value='\n'.join(current_filter_order) if current_filter_order else '\n'.join(all_filterable_columns),
-                        height=200,
-                        key="equipment_filter_order"
-                    )
-                    
-                    if st.button("💾 Save Equipment Filter Order", key="save_equipment_filter_order_btn"):
-                        # Parse the input
-                        if '\n' in filter_order_input:
-                            new_order = [f.strip() for f in filter_order_input.split('\n') if f.strip()]
-                        else:
-                            new_order = [f.strip() for f in filter_order_input.split(',') if f.strip()]
-                        
-                        # Validate that all filters exist in available columns
-                        invalid_filters = [f for f in new_order if f not in all_filterable_columns]
-                        missing_filters = [f for f in all_filterable_columns if f not in new_order]
-                        
-                        if invalid_filters:
-                            st.error(f"❌ Invalid column names: {', '.join(invalid_filters)}")
-                            st.info(f"📋 Available columns: {', '.join(all_filterable_columns)}")
-                        elif missing_filters:
-                            st.warning(f"⚠️ Missing columns (will be added at end): {', '.join(missing_filters)}")
-                            new_order.extend(missing_filters)
-                            
-                            # Also save the updated excluded columns if they changed
-                            if excluded_cols_input.strip():
-                                new_excluded_cols = [col.strip() for col in excluded_cols_input.split(',') if col.strip()]
-                                # Save excluded columns to a separate preference file
-                                try:
-                                    excluded_cols_file = Path("excluded_filter_columns.json")
-                                    with open(excluded_cols_file, 'w') as f:
-                                        json.dump({"excluded_columns": new_excluded_cols}, f, indent=2)
-                                except Exception as e:
-                                    st.warning(f"⚠️ Could not save excluded columns preference: {str(e)}")
-                            
-                            self._save_filter_order(new_order)
-                            st.success("✅ Equipment filter order saved successfully!")
-                            st.rerun()
-                        else:
-                            # Also save the updated excluded columns if they changed
-                            if excluded_cols_input.strip():
-                                new_excluded_cols = [col.strip() for col in excluded_cols_input.split(',') if col.strip()]
-                                # Save excluded columns to a separate preference file
-                                try:
-                                    excluded_cols_file = Path("excluded_filter_columns.json")
-                                    with open(excluded_cols_file, 'w') as f:
-                                        json.dump({"excluded_columns": new_excluded_cols}, f, indent=2)
-                                except Exception as e:
-                                    st.warning(f"⚠️ Could not save excluded columns preference: {str(e)}")
-                            
-                            self._save_filter_order(new_order)
-                            st.success("✅ Equipment filter order saved successfully!")
-                            st.rerun()
-                else:
-                    st.info("No data available to determine filterable columns")
-                
-                st.markdown("📋 **Instructions:**")
-                st.markdown("1. **Configure Excluded Columns**: Add/remove columns from the excluded list")
-                st.markdown("2. **Reorder Filters**: Edit the filter order (one column per line or comma-separated)")
-                st.markdown("3. **Save**: Click 'Save Equipment Filter Order' to apply changes")
-                st.markdown("4. **Result**: Filter dropdowns will appear in your custom order, excluding specified columns")
-
-    def Add_New_Column_to_Equipment_records_DB(self):
-        # Check if user has admin permissions - only show UI if they do
-        permissions = self.auth_manager.get_user_permissions()
-        if not permissions.get("can_manage_users", False):
-            # Don't show anything for non-admin users
-            return
-        
-        # Button to add a new column to the DB (must be after Equipment_collection and self.df are set)
-        with st.expander("➕ Add New Column to Equipment DB"):
-            st.markdown("### Add New Column")
-            new_col_name = st.text_input("New Column Name", key="new_col_name")
-            new_col_default = st.text_input("Default Value (optional)", key="new_col_default")
-            
-            st.info("💡 **Dropdown Integration**: If a column with the same name exists in Equipment Select Options, this column will automatically use dropdown values from there.")
-            
-            if st.button("➕ Add Column to All Records", key="add_col_btn"):
-                if new_col_name and new_col_name.strip():
-                    # Check if column already exists
-                    if new_col_name.strip() in self.df.columns:
-                        st.error(f"❌ Column '{new_col_name.strip()}' already exists. Please choose a different name.")
-                    else:
-                        modified_count = self.add_column_to_db(new_col_name, new_col_default if new_col_default else None)
-                        st.success(f"✅ Added column '{new_col_name}' to {modified_count} records.")
-                        
-                        # Check if the column exists in Equipment Select Options
-                        if (hasattr(self, 'Equipment_select_options_db_df') and 
-                            self.Equipment_select_options_db_df is not None and 
-                            new_col_name in self.Equipment_select_options_db_df.columns):
-                            st.info(f"🔄 Column '{new_col_name}' has matching dropdown options in Equipment Select Options and has been synced.")
-                        
-                        st.info("🔄 Page will refresh to show the updated column.")
-                        st.rerun()
-                else:
-                    st.warning("⚠️ Please enter a column name.")
-
-    def rename_column_in_equipment_records_db(self):
-        # Check if user has admin permissions - only show UI if they do
-        permissions = self.auth_manager.get_user_permissions()
-        if not permissions.get("can_manage_users", False):
-            # Don't show anything for non-admin users
-            return
-        
-        # Button to rename a column in the DB (only visible to admins)
-        with st.expander("✏️ Rename Column in Equipment DB"):
-            # Static columns that should not be renamed due to web functionality dependencies
-            static_columns = ["Category", "Vendor", "Location", "Serial", "uuid", "_id", "ID"]
-            
-            # Get available columns for renaming (exclude static columns that shouldn't be renamed)
-            available_columns = [col for col in self.df.columns if col not in static_columns]
-            
-            # Show info about protected columns
-            st.info(f"🔒 **Protected columns** (cannot be renamed): {', '.join(static_columns)}")
-            st.caption("These columns have special functionality and must maintain their names.")
-            
-            if available_columns:
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    col_to_rename = st.selectbox(
-                        "Select Column to Rename:",
-                        available_columns,
-                        key="rename_col_select"
-                    )
-                
-                with col2:
-                    new_col_name = st.text_input(
-                        "New Column Name:",
-                        value=col_to_rename if col_to_rename else "",
-                        key="new_col_name_input"
-                    )
-                
-                # Validation and rename button
-                if col_to_rename and new_col_name and new_col_name.strip():
-                    # Check if new name already exists
-                    if new_col_name.strip() in self.df.columns and new_col_name.strip() != col_to_rename:
-                        st.error(f"❌ Column name '{new_col_name.strip()}' already exists. Please choose a different name.")
-                    elif new_col_name.strip() == col_to_rename:
-                        st.info("💡 New name is the same as current name. No changes needed.")
-                    else:
-                        if st.button("✏️ Rename Column", key="rename_col_btn", type="primary"):
-                            try:
-                                modified_count = self.rename_column_in_db(col_to_rename, new_col_name.strip())
-                                st.success(f"✅ Successfully renamed column '{col_to_rename}' to '{new_col_name.strip()}' in {modified_count} records.")
-                                st.info("🔄 Page will refresh to show the updated column name.")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"❌ Error renaming column: {str(e)}")
-                else:
-                    if col_to_rename and not new_col_name.strip():
-                        st.warning("⚠️ Please enter a new column name.")
-            else:
-                st.info("📋 All current columns are protected and cannot be renamed. You can add new columns using the 'Add New Column' feature.")
-
-    def add_new_column_to_select_options_db(self):
-        # Button to add a new column to the Equipment Select Options DB
-        with st.expander("➕ Add New Column to Equipment Select Options DB"):
-            st.markdown("### Add New Column")
-            new_col_name = st.text_input("New Column Name", key="new_select_col_name")
-            new_col_default = st.text_input("Default Value (optional)", key="new_select_col_default")
-            
-            st.info("💡 **Auto-Sync Feature**: If a column with the same name exists in Equipment Records, it will be automatically updated to use only values from this dropdown list.")
-            
-            if st.button("➕ Add Column to All Records", key="add_select_col_btn"):
-                if new_col_name and new_col_name.strip():
-                    try:
-                        modified_count = self.add_column_to_select_options_db(new_col_name, new_col_default if new_col_default else None)
-                        st.success(f"✅ Added column '{new_col_name}' to {modified_count} select option records.")
-                        
-                        # Check if the column exists in Equipment Records
-                        if hasattr(self, 'df') and new_col_name in self.df.columns:
-                            st.info(f"🔄 Column '{new_col_name}' also exists in Equipment Records and has been synced with dropdown options.")
-                        
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"❌ Error adding column: {str(e)}")
-            
-            # Manual sync section
-            st.markdown("### Manual Column Synchronization")
-            st.info("🔧 **Manual Sync**: Force sync all matching columns between Equipment Records and Equipment Select Options.")
-            
-            if st.button("🔄 Sync All Matching Columns", key="sync_all_columns_btn"):
-                self._sync_all_columns_with_select_options()
-
-    def delete_column_from_select_options_db_ui(self):
-        # Button to delete a column from the Equipment Select Options DB
-        with st.expander("🗑️ Delete Column from Equipment Select Options DB"):
-            # Get available columns for deletion (exclude essential columns)
-            if hasattr(self, 'Equipment_select_options_db_df') and self.Equipment_select_options_db_df is not None:
-                available_columns = [col for col in self.Equipment_select_options_db_df.columns if col not in ['index', '_id']]
-                
-                if available_columns:
-                    col_to_delete = st.selectbox(
-                        "Select Column to Delete:",
-                        available_columns,
-                        key="delete_select_col_select"
-                    )
-                    
-                    # Check if we're showing confirmation for this column
-                    confirm_key = f"confirm_delete_select_col_{col_to_delete}" if col_to_delete else None
-                    
-                    if confirm_key and st.session_state.get(confirm_key, False):
-                        # Show warning popup
-                        st.warning(f"⚠️ **Delete Column '{col_to_delete}' from Equipment Select Options?**")
-                        st.write(f"This will permanently remove the **'{col_to_delete}'** column from all Equipment Select Options records.")
-                        st.write("⚠️ **This action cannot be undone!**")
-                        
-                        col_yes, col_no = st.columns(2)
-                        with col_yes:
-                            if st.button("✅ Yes, Delete", key=f"confirm_delete_yes_{col_to_delete}"):
-                                try:
-                                    modified_count = self.delete_column_from_select_options_db(col_to_delete)
-                                    
-                                    # Refresh the DataFrame from database to ensure consistency
-                                    self.Equipment_select_options_db_records = list(self.Equipment_select_options.find({}, {'_id': 0}))
-                                    self.Equipment_select_options_db_df = pd.DataFrame(self.Equipment_select_options_db_records)
-                                    
-                                    # Apply column order after refresh
-                                    if not self.Equipment_select_options_db_df.empty:
-                                        # Ensure 'index' column is present for deletion logic
-                                        if 'index' not in self.Equipment_select_options_db_df.columns:
-                                            self.Equipment_select_options_db_df['index'] = self.Equipment_select_options_db_df.index
-                                        # Apply admin-saved column order
-                                        self.Equipment_select_options_db_df = self._apply_column_order(self.Equipment_select_options_db_df, 'select_options')
-                                    
-                                    st.success(f"✅ Successfully deleted column '{col_to_delete}' from {modified_count} select option records.")
-                                    # Clear confirmation state
-                                    st.session_state[confirm_key] = False
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"❌ Error deleting column: {str(e)}")
-                                    # Clear confirmation state on error too
-                                    st.session_state[confirm_key] = False
-                        
-                        with col_no:
-                            if st.button("❌ Cancel", key=f"confirm_delete_no_{col_to_delete}"):
-                                # Clear confirmation state
-                                st.session_state[confirm_key] = False
-                                st.rerun()
-                    else:
-                        # Show initial delete button
-                        if st.button("🗑️ Delete Column", key="delete_select_col_btn", type="primary"):
-                            if col_to_delete and confirm_key:
-                                # Set confirmation state
-                                st.session_state[confirm_key] = True
-                                st.rerun()
-                else:
-                    st.info("No columns available for deletion")
-            else:
-                st.info("No select options data available")
-
-    def rename_column_in_select_options_db_ui(self):
-        # Button to rename a column in the Equipment Select Options DB
-        with st.expander("✏️ Rename Column in Equipment Select Options DB"):
-            # Get available columns for renaming (exclude essential columns that shouldn't be renamed)
-            if hasattr(self, 'Equipment_select_options_db_df') and self.Equipment_select_options_db_df is not None:
-                available_columns = [col for col in self.Equipment_select_options_db_df.columns if col not in ['_id']]
-                
-                if available_columns:
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        col_to_rename = st.selectbox(
-                            "Select Column to Rename:",
-                            available_columns,
-                            key="rename_select_col_select"
-                        )
-                    
-                    with col2:
-                        new_col_name = st.text_input(
-                            "New Column Name:",
-                            value=col_to_rename if col_to_rename else "",
-                            key="new_select_col_name_input"
-                        )
-                    
-                    # Validation and rename button
-                    if col_to_rename and new_col_name and new_col_name.strip():
-                        # Check if new name already exists
-                        if new_col_name.strip() in self.Equipment_select_options_db_df.columns and new_col_name.strip() != col_to_rename:
-                            st.error(f"❌ Column name '{new_col_name.strip()}' already exists. Please choose a different name.")
-                        elif new_col_name.strip() == col_to_rename:
-                            st.info("💡 New name is the same as current name. No changes needed.")
-                        else:
-                            if st.button("✏️ Rename Column", key="rename_select_col_btn", type="primary"):
-                                try:
-                                    modified_count = self.rename_column_in_select_options_db(col_to_rename, new_col_name.strip())
-                                    st.success(f"✅ Successfully renamed column '{col_to_rename}' to '{new_col_name.strip()}' in {modified_count} select option records.")
-                                    st.info("🔄 Page will refresh to show the updated column name.")
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"❌ Error renaming column: {str(e)}")
-                    else:
-                        if col_to_rename and not new_col_name.strip():
-                            st.warning("⚠️ Please enter a new column name.")
-                else:
-                    st.info("No columns available for renaming")
-            else:
-                st.info("No select options data available")
-
-    def Equipment_select_options_Filters(self):
-        # Initialize session state to reduce notification noise during cell selection
-        if 'show_selection_messages' not in st.session_state:
-            st.session_state['show_selection_messages'] = False  # Reduce notification noise
-        
-        # --- Inline filter column (not sidebar) ---
-        # Print the current filter state
-        st.markdown('**🔍Equipment_select_options Filters:**')
-        
-        # Handle case where DataFrame is empty or None
-        if self.Equipment_select_options_db_df is None or self.Equipment_select_options_db_df.empty:
-            st.info("📋 No Equipment Select Options found in the database. Add some data to get started!")
-            st.markdown("### Equipment Select Options")
-            st.write("Database is empty. Please add some Equipment Select Options records.")
-            return
-        
-        # Ensure column types are identified for sorting
-        self._identify_column_types()
-        
-        filter_columns = {}
-        filtered_select_options_df = self.Equipment_select_options_db_df.copy()
-        filter_widgets = []
-        filter_cols = []
-        
-        # Build filter columns using saved filter order or default logic
-        filter_cols = []
-        
-        # Get excluded filter columns
-        try:
-            excluded_cols_file = Path("excluded_select_options_filter_columns.json")
-            if excluded_cols_file.exists():
-                with open(excluded_cols_file, 'r') as f:
-                    preferences = json.load(f)
-                excluded_filter_cols = preferences.get("excluded_columns", ["ID", "check", "uuid", "index"])
-            else:
-                excluded_filter_cols = ["ID", "check", "uuid", "index"]
-        except Exception:
-            excluded_filter_cols = ["ID", "check", "uuid", "index"]
-        
-        # Get all available filterable columns (excluding the excluded ones)
-        all_available_cols = []
-        if hasattr(self, 'Equipment_select_options_db_df') and self.Equipment_select_options_db_df is not None:
-            for col in self.Equipment_select_options_db_df.columns:
-                if col not in excluded_filter_cols:
-                    all_available_cols.append(col)
-        
-        # Load saved filter order
-        saved_filter_order = self._load_select_options_filter_order(all_available_cols)
-        
-        # Use saved order for filter columns, but only include columns that actually exist
-        for col in saved_filter_order:
-            if col in self.Equipment_select_options_db_df.columns and col not in filter_cols:
-                filter_cols.append(col)
-
-        left_col, right_col = st.columns([1, 4])
-        with left_col:
-            # Track current filter state to detect changes
-            current_filter_state = {}
-            filter_changed = False
-            search_text = st.text_input('🔍 Search', key='select_options_search')
-            current_filter_state['select_options_search'] = search_text
-            if search_text:
-                mask = pd.Series([False] * len(filtered_select_options_df))
-                for col in self.search_cols:
-                    if col in filtered_select_options_df.columns:
-                        mask |= filtered_select_options_df[col].astype(str).str.contains(search_text, case=False, na=False)
-                filtered_select_options_df = filtered_select_options_df[mask]
-
-            # Apply column filters
-            for col_name in filter_cols:
-                options = ['All'] + sorted([str(val) for val in self.Equipment_select_options_db_df[col_name].dropna().unique() if str(val).strip() != ''])
-                selected = st.selectbox(f"{col_name}", options, key=f'select_options_{col_name}')
-                filter_columns[col_name] = selected
-                current_filter_state[f'select_options_{col_name}'] = selected
-                if selected != 'All':
-                    filtered_select_options_df = filtered_select_options_df[filtered_select_options_df[col_name] == selected]
-
-            # Check if filters have changed
-            if 'previous_select_options_filter_state' not in st.session_state:
-                st.session_state['previous_select_options_filter_state'] = current_filter_state
-            
-            if st.session_state['previous_select_options_filter_state'] != current_filter_state:
-                filter_changed = True
-                st.session_state['previous_select_options_filter_state'] = current_filter_state
-                
-                # If we were in select all mode and filters changed, update the selection
-                if 'select_all_select_options_rows' in st.session_state:
-                    # Set flag to reapply select all after filtering
-                    st.session_state['reapply_select_all_select_options'] = True
-
-        with right_col:
-            # Include any newly added rows from session state that haven't been saved yet
-            if 'newly_added_select_options_rows' in st.session_state and st.session_state.newly_added_select_options_rows:
-                new_rows_df = pd.DataFrame(st.session_state.newly_added_select_options_rows)
-                self.display_select_options_df = pd.concat([filtered_select_options_df, new_rows_df], ignore_index=True)
-            else:
-                self.display_select_options_df = filtered_select_options_df.copy()
-            
-            # Sort display_df by ID column consistently (or fall back to index)
-            if not self.display_select_options_df.empty:
-                if 'ID' in self.display_select_options_df.columns:
-                    try:
-                        # Sort by ID column in ascending order
-                        if pd.api.types.is_numeric_dtype(self.display_select_options_df['ID']):
-                            self.display_select_options_df = self.display_select_options_df.sort_values(
-                                by='ID', ascending=True, na_position='last'
-                            ).reset_index(drop=True)
-                        else:
-                            # Handle mixed/string ID column
-                            self.display_select_options_df = self.display_select_options_df.sort_values(
-                                by='ID', 
-                                ascending=True, 
-                                na_position='last', 
-                                key=lambda x: pd.to_numeric(x, errors='coerce').fillna(float('inf'))
-                            ).reset_index(drop=True)
-                    except Exception:
-                        # If ID sorting fails, fall back to index sorting
-                        if 'index' in self.display_select_options_df.columns:
-                            try:
-                                self.display_select_options_df = self.display_select_options_df.sort_values(by='index', ascending=True, na_position='last').reset_index(drop=True)
-                            except Exception:
-                                pass
-                elif 'index' in self.display_select_options_df.columns:
-                    try:
-                        self.display_select_options_df = self.display_select_options_df.sort_values(by='index', ascending=True, na_position='last').reset_index(drop=True)
-                    except Exception:
-                        # If sorting fails, leave data unsorted
-                        pass
-            
-            # Check if we need to reapply select all after filtering
-            if 'reapply_select_all_select_options' in st.session_state and st.session_state['reapply_select_all_select_options']:
-                # Update the select all rows with the new filtered data
-                st.session_state['select_all_select_options_rows'] = self.display_select_options_df.to_dict('records')
-                st.session_state['reapply_select_all_select_options'] = False
-                # Force grid reload to show the new selection
-                st.session_state['force_select_options_grid_reload'] = True
-                st.session_state['select_options_grid_key'] = st.session_state.get('select_options_grid_key', 0) + 1
-            
-            st.subheader("📊 Equipment Select Options")
-            
-            # Add custom Select All / Clear Selection buttons at the top
-            col1, col2, col3, col4 = st.columns([1, 1, 1, 2])
-            with col1:
-                if st.button("☑️ Select All Visible", key="select_all_select_options_btn", help="Select all rows currently visible (after all filtering) - selection will be maintained when filtering"):
-                    # Store the selection data
-                    st.session_state['select_all_select_options_rows'] = self.display_select_options_df.to_dict('records')
-                    st.session_state['select_all_select_options_active'] = True
-                    st.session_state['force_select_options_grid_reload'] = True
-                    st.session_state['select_options_grid_key'] = st.session_state.get('select_options_grid_key', 0) + 1
-                    # Ensure we stay on the current page after rerun
-                    st.session_state['current_page'] = "Equipment Select Options"
-            
-            with col2:
-                if st.button("⬜ Clear Selection", key="clear_selection_select_options_btn", help="Clear all selected rows"):
-                    # Clear the selection by removing from session state
-                    if 'select_all_select_options_rows' in st.session_state:
-                        del st.session_state['select_all_select_options_rows']
-                    if 'select_all_select_options_active' in st.session_state:
-                        del st.session_state['select_all_select_options_active']
-                    # Force grid reload and increment key to force visual update
-                    st.session_state['force_select_options_grid_reload'] = True
-                    st.session_state['select_options_grid_key'] = st.session_state.get('select_options_grid_key', 0) + 1
-                    # Force grid reload and increment key to force visual update
-                    st.session_state['force_select_options_grid_reload'] = True
-                    st.session_state['select_options_grid_key'] = st.session_state.get('select_options_grid_key', 0) + 1
-                    # st.rerun()
-            
-            with col3:
-                if st.button("🔄 Refresh Selection", key="refresh_selection_select_options_btn", help="Refresh the current selection based on filters"):
-                    # Reapply select all to current filtered data if select all was active
-                    if st.session_state.get('select_all_select_options_active', False):
-                        st.session_state['select_all_select_options_rows'] = self.display_select_options_df.to_dict('records')
-                        st.session_state['force_select_options_grid_reload'] = True
-                        st.session_state['select_options_grid_key'] = st.session_state.get('select_options_grid_key', 0) + 1
-                    st.rerun()
-            
-            # Get user permissions
-            permissions = self.auth_manager.get_user_permissions()
-
-            # Configure AgGrid for Select Options
-            gb = GridOptionsBuilder.from_dataframe(self.display_select_options_df)
-            
-            # Enable editing based on permissions
-            gb.configure_default_column(
-                editable=permissions["can_edit"], 
-                groupable=True, 
-                resizable=True, 
-                sortable=True, 
-                filter=True,
-                flex=1,  # Enable flexible column sizing
-                minWidth=80,  # Set minimum width for all columns
-                singleClickEdit=True,  # Enable single-click editing for better responsiveness
-                stopEditingWhenCellsLoseFocus=True  # Save edits when cell loses focus
-            )
-            
-            # Configure specific columns with flexible sizing
-            for col in self.display_select_options_df.columns:
-                col_lower = col.lower()
-                
-                if col == 'index':
-                    # Make index column non-editable and fixed narrow width (not pinned to allow checkboxes on the left)
-                    gb.configure_column(col, editable=False, width=100, flex=0)
-                elif any(term in col_lower for term in ['id', '_id']):
-                    # ID columns - make read-only with small flex ratio
-                    gb.configure_column(col, editable=False, flex=0.5, minWidth=60, maxWidth=120)
-                elif any(term in col_lower for term in ['serial', 'ser_num', 'serial_number']):
-                    # Serial number columns - medium flex ratio with validation styling
-                    gb.configure_column(
-                        col, 
-                        editable=permissions["can_edit"],
-                        flex=1, 
-                        minWidth=120, 
-                        maxWidth=250,
-                        cellStyle={'backgroundColor': '#fff3cd', 'border': '1px solid #ffeaa7'},  # Light yellow background
-                        headerTooltip=f"Serial numbers should be unique for better organization."
-                    )
-                elif any(term in col_lower for term in ['description', 'comments']):
-                    # Description columns - large text editor with higher flex ratio
-                    gb.configure_column(
-                        col, 
-                        editable=permissions["can_edit"], 
-                        cellEditor='agLargeTextCellEditor', 
-                        cellEditorPopup=True,
-                        flex=2,  # Give more space to description columns
-                        minWidth=150
-                    )
-                elif any(term in col_lower for term in ['date', 'cal']):
-                    # Date columns - smaller flex ratio
-                    gb.configure_column(
-                        col, 
-                        editable=permissions["can_edit"], 
-                        type=["dateColumnFilter", "customDateTimeFormat"], 
-                        custom_format_string='yyyy-MM-dd',
-                        flex=0.8,
-                        minWidth=100
-                    )
-                elif any(term in col_lower for term in ['value', 'price', 'cost', 'year']):
-                    # Numeric columns - smaller flex ratio
-                    gb.configure_column(
-                        col, 
-                        editable=permissions["can_edit"], 
-                        type=["numericColumn", "numberColumnFilter", "customNumericFormat"], 
-                        precision=2,
-                        flex=0.7,
-                        minWidth=80
-                    )
-                else:
-                    # Default columns - standard flex ratio
-                    gb.configure_column(col, editable=permissions["can_edit"], flex=1, minWidth=100)
-            
-            # Enable selection (with checkboxes for row selection on the left)
-            gb.configure_selection(
-                selection_mode="multiple", 
-                use_checkbox=True
-            )
-            
-            # Enable pagination
-            gb.configure_pagination(enabled=True, paginationPageSize=20)
-            
-            # Configure grid options for better checkbox functionality and left-side checkboxes
-            gb.configure_grid_options(
-                suppressColumnVirtualisation=False,
-                suppressRowVirtualisation=False,
-                enableRangeSelection=True,
-                rowSelection='multiple',
-                rowMultiSelectWithClick=True,  # Enable multi-select
-                suppressRowDeselection=False,  # Allow deselection
-                animateRows=True,
-                suppressMovableColumns=False,
-                enableCellTextSelection=True,
-                headerHeight=40,  # Ensure header is tall enough for checkbox
-                checkboxSelection=True,  # Enable checkbox selection on the left
-                headerCheckboxSelection=True,  # Enable header checkbox for select all
-                suppressRowClickSelection=False  # Allow row click selection
-            )
-            
-            # Pre-select rows if we're in "select all" mode
-            if 'select_all_select_options_rows' in st.session_state:
-                # Add JavaScript to select all visible rows on grid ready
-                pre_select_js = """
-                function onGridReady(params) {
-                    setTimeout(function() {
-                        params.api.selectAll();
-                    }, 100);
-                }
-                """
-                gb.configure_grid_options(
-                    onGridReady=JsCode(pre_select_js)
-                )
-            
-            # Enable adding new rows (only for users with edit permissions)
-            if permissions["can_edit"]:
-                gb.configure_grid_options(
-                    enableRangeSelection=True,
-                    rowSelection='multiple',
-                    suppressRowClickSelection=False,
-                    suppressCellSelection=False,  # Allow cell selection without triggering rerun
-                    suppressRowDeselection=False,
-                    suppressMultiRangeSelection=False,
-                    stopEditingWhenCellsLoseFocus=True,  # Auto-save when losing focus
-                    undoRedoCellEditing=True,  # Enable undo/redo for better UX
-                    undoRedoCellEditingLimit=20  # Limit undo history
-                )
-            
-            # Check for select all mode and force grid reload if needed
-            force_reload = 'force_select_options_grid_reload' in st.session_state and st.session_state['force_select_options_grid_reload']
-            if force_reload:
-                st.session_state['force_select_options_grid_reload'] = False
-            
-            # Determine what data to display in AgGrid
-            grid_data = self.display_select_options_df
-            if (st.session_state.get('select_all_select_options_active', False) and 
-                'select_all_select_options_rows' in st.session_state and
-                len(st.session_state['select_all_select_options_rows']) < len(self.display_select_options_df)):
-                # We're in select all mode with filtered data - create DataFrame from selected rows
-                grid_data = pd.DataFrame(st.session_state['select_all_select_options_rows'])
-                # Ensure it has the same column order as display_df
-                if not grid_data.empty:
-                    grid_data = grid_data.reindex(columns=self.display_select_options_df.columns, fill_value='')
-            
-            # Display the AgGrid
-            grid_response = AgGrid(
-                grid_data,
-                gridOptions=gb.build(),
-                data_return_mode=DataReturnMode.FILTERED_AND_SORTED,
-                update_mode=GridUpdateMode.MODEL_CHANGED,
-                allow_unsafe_jscode=True,
-                fit_columns_on_grid_load=True,  # Enable auto-fitting columns to content
-                height=600,
-                theme='streamlit',
-                enable_enterprise_modules=False,
-                reload_data=force_reload,
-                key=f"select_options_grid_{st.session_state.get('select_options_grid_key', 0)}"
-            )
-            
-            # Get the selected rows for use in row management below
-            selected_rows = grid_response['selected_rows']
-            
-            # Get the currently visible/filtered data from AgGrid (after internal filtering)
-            visible_data = grid_response['data']  # This contains only the rows visible after AgGrid filtering
-            
-            # Handle refresh selection request with actual visible data
-            if st.session_state.get('refresh_select_options_selection_requested', False):
-                if 'select_all_select_options_rows' in st.session_state:
-                    # Convert visible_data to the correct format if it's a DataFrame
-                    if isinstance(visible_data, pd.DataFrame):
-                        st.session_state['select_all_select_options_rows'] = visible_data.to_dict('records')
-                    else:
-                        st.session_state['select_all_select_options_rows'] = visible_data
-                    st.session_state['selection_auto_updated'] = True
-                st.session_state['refresh_select_options_selection_requested'] = False  # Clear the flag
-            
-            # Check if AgGrid filtering resulted in empty data and we should show a message
-            if len(visible_data) == 0 and len(grid_data) > 0:
-                st.session_state['show_empty_filter_message'] = True
-            
-            # Track AgGrid internal filtering changes more conservatively
-            current_visible_count = len(visible_data)
-            
-            # Create a more stable signature that doesn't change on every interaction
-            if current_visible_count > 0:
-                visible_signature = f"count_{current_visible_count}"
-            else:
-                visible_signature = "empty"
-            
-            # Initialize tracking if not exists
-            if 'previous_visible_select_options_signature' not in st.session_state:
-                st.session_state['previous_visible_select_options_signature'] = visible_signature
-                st.session_state['select_options_signature_stable_count'] = 0
-            
-            # Only update selection if we're in select all mode - simplified logic
-            if 'select_all_select_options_rows' in st.session_state and st.session_state['previous_visible_select_options_signature'] != visible_signature:
-                # Only update if we have visible data (not empty)
-                if current_visible_count > 0:
-                    # Convert visible_data to the correct format if it's a DataFrame
-                    if isinstance(visible_data, pd.DataFrame):
-                        st.session_state['select_all_select_options_rows'] = visible_data.to_dict('records')
-                    else:
-                        st.session_state['select_all_select_options_rows'] = visible_data
-                    st.session_state['selection_auto_updated'] = True
-                else:
-                    st.session_state['show_empty_filter_message'] = True
-            
-            # Update the tracked signature
-            st.session_state['previous_visible_select_options_signature'] = visible_signature
-            
-            # Check if we're in "select all" mode and override selected_rows
-            if 'select_all_select_options_rows' in st.session_state:
-                selected_rows = st.session_state['select_all_select_options_rows']
-            
-            # Show notification if selection was automatically updated due to filtering (reduce noise)
-            if st.session_state.get('selection_auto_updated', False) and st.session_state.get('show_selection_messages', True):
-                st.success("🔄 **Selection automatically updated** to match filtered results!")
-                st.session_state['selection_auto_updated'] = False  # Clear the flag
-            
-            # Show notification if showing all data due to empty AgGrid filters (reduce noise)  
-            if st.session_state.get('show_empty_filter_message', False) and st.session_state.get('show_selection_messages', True):
-                st.info("📄 **Showing all data** - AgGrid filters resulted in no matches, displaying complete dataset")
-                st.session_state['show_empty_filter_message'] = False  # Clear the flag
-            
-            # Display selection help
-            if selected_rows is not None and len(selected_rows) > 0:
-                if 'select_all_select_options_rows' in st.session_state:
-                    st.info(f"✅ **ALL {len(selected_rows)} row(s) selected** (Select All mode - automatically adapts to sidebar filters, use 'Refresh Selection' after AgGrid column filtering) - Use the buttons below for bulk operations")
-                else:
-                    st.info(f"✅ **{len(selected_rows)} row(s) selected** ")
-            
-            # Get edited data from AgGrid
-            self.edited_select_options_df = grid_response['data']
-            
-            # Add Save Changes to Database button right after the AgGrid (only for users with edit permissions)
-            if permissions["can_edit"]:
-                if st.button("💾 Save Changes to Database", key="save_changes_btn_select_options"):
-                    import uuid  # Import at the proper scope level
-                    import numpy as np  # Import numpy for type checking
-                    
-                    # Helper function to convert numpy types to Python native types
-                    def convert_to_python_type(value):
-                        """Convert numpy types to Python native types for MongoDB compatibility"""
-                        if pd.isna(value):
-                            return ""  # Convert NaN to empty string for MongoDB
-                        elif hasattr(value, 'item'):  # numpy scalar
-                            return value.item()
-                        elif isinstance(value, np.integer):
-                            return int(value)
-                        elif isinstance(value, np.floating):
-                            return float(value)
-                        elif isinstance(value, np.bool_):
-                            return bool(value)
-                        elif isinstance(value, (pd.Int64Dtype, pd.Float64Dtype)):
-                            return float(value) if pd.notna(value) else ""
-                        else:
-                            return value
-                    
-                    # Prevent accidental deletion if DataFrame is empty
-                    if self.edited_select_options_df is None or self.edited_select_options_df.empty:
-                        st.error("Cannot save: No data to save. The table is empty.")
-                        return
-
-                    # Smart save: Only save actual changes at the cell level
-                    original_data = self.Equipment_select_options_db_df.copy()
-                    edited_data = self.edited_select_options_df.copy()
-                    
-                    if original_data.empty or edited_data.empty:
-                        st.info("No data to compare for changes.")
-                        return
-                    
-                    # Clean up invalid column names that might cause KeyErrors
-                    def clean_column_names(df):
-                        """Remove or rename invalid column names"""
-                        valid_columns = []
-                        for col in df.columns:
-                            # Skip columns with invalid names
-                            if pd.isna(col) or str(col).lower() in ['nan', 'none', ''] or str(col).strip() == '':
-                                continue
-                            valid_columns.append(col)
-                        return df[valid_columns]
-                    
-                    # Apply column cleaning
-                    original_data = clean_column_names(original_data)
-                    edited_data = clean_column_names(edited_data)
-                    
-                    # Ensure both DataFrames have 'index' column for matching
-                    if 'index' not in original_data.columns or 'index' not in edited_data.columns:
-                        st.error("Index column missing - cannot determine which records to update.")
-                        return
-                    
-                    # Convert index columns to string for reliable matching
-                    original_data['index'] = original_data['index'].astype(str)
-                    edited_data['index'] = edited_data['index'].astype(str)
-                    
-                    # Fix missing or duplicate indices - ensure each row has a unique index
-                    import uuid
-                    
-                    # Check for and fix missing indices in original data
-                    missing_indices_orig = original_data['index'].isna() | (original_data['index'] == 'nan') | (original_data['index'] == 'None') | (original_data['index'] == '')
-                    if missing_indices_orig.any():
-                        # Batch update approach - much faster than individual updates
-                        updates_to_make = []
-                        
-                        for idx in original_data[missing_indices_orig].index:
-                            new_uuid = str(uuid.uuid4())
-                            original_data.loc[idx, 'index'] = new_uuid
-                            
-                            # Create update info for batch processing
-                            filter_query = {"index": {"$exists": False}}
-                            # Try to find a more specific filter if possible
-                            row_data = original_data.iloc[idx].to_dict()
-                            for col, val in row_data.items():
-                                if col != 'index' and pd.notna(val):
-                                    filter_query = {col: val}
-                                    break
-                            
-                            updates_to_make.append({
-                                'filter': filter_query,
-                                'new_index': new_uuid
-                            })
-                        
-                        # Execute batch updates
-                        if updates_to_make:
-                            try:
-                                for update_info in updates_to_make:
-                                    filter_query = update_info['filter']
-                                    self.Equipment_select_options.update_one(
-                                        filter_query,
-                                        {"$set": {"index": update_info['new_index']}}
-                                    )
-                            except Exception as e:
-                                st.warning(f"Batch update encountered error: {e}")
-                    
-                    
-                    # Check for and fix missing indices in edited data
-                    missing_indices_edit = edited_data['index'].isna() | (edited_data['index'] == 'nan') | (edited_data['index'] == 'None') | (edited_data['index'] == '')
-                    if missing_indices_edit.any():
-                        for idx in edited_data[missing_indices_edit].index:
-                            # Use the corresponding index from original_data if it was fixed
-                            if idx < len(original_data):
-                                edited_data.loc[idx, 'index'] = original_data.iloc[idx]['index']
-                            else:
-                                # New row, assign new UUID
-                                edited_data.loc[idx, 'index'] = str(uuid.uuid4())
-                    
-                    # Since we have issues with UUID-based matching, let's use row-by-row comparison instead
-                    # This is more reliable for detecting changes in data editor scenarios
-                    
-                    update_count = 0
-                    insert_count = 0
-                    changes_detected = []
-                    
-                    # Compare row by row using pandas index positions
-                    min_rows = min(len(original_data), len(edited_data))
-                    
-                    # First pass: identify which rows actually have changes
-                    rows_with_changes = []
-                    for row_idx in range(min_rows):
-                        original_row = original_data.iloc[row_idx]
-                        edited_row = edited_data.iloc[row_idx]
-                        
-                        # Skip comparison if critical data is missing
-                        if pd.isna(original_row.get('index')) or pd.isna(edited_row.get('index')):
-                            continue
-                            
-                        # Check if any column values have changed
-                        has_changes = False
-                        for col in original_data.columns:
-                            if col in edited_data.columns:
-                                orig_val = original_row[col]
-                                edit_val = edited_row[col]
-                                
-                                # Handle NaN comparisons properly
-                                if pd.isna(orig_val) and pd.isna(edit_val):
-                                    continue  # Both are NaN, no change
-                                elif pd.isna(orig_val) or pd.isna(edit_val):
-                                    has_changes = True  # One is NaN, the other isn't
-                                    break
-                                elif str(orig_val) != str(edit_val):
-                                    has_changes = True
-                                    break
-                        
-                        if has_changes:
-                            rows_with_changes.append(row_idx)
-                    
-                    # Second pass: update only the rows that have changes
-                    for row_idx in rows_with_changes:
-                        try:
-                            original_row = original_data.iloc[row_idx]
-                            edited_row = edited_data.iloc[row_idx]
-                            
-                            # Convert pandas Series to dict and handle data types properly
-                            update_data = {}
-                            for col, value in edited_row.items():
-                                update_data[col] = convert_to_python_type(value)
-                            
-                            # Update the document by its index
-                            filter_query = {"index": str(original_row['index'])}
-                            result = self.Equipment_select_options.update_one(
-                                filter_query,
-                                {"$set": update_data}
-                            )
-                            
-                            if result.modified_count > 0:
-                                update_count += 1
-                                changes_detected.append(f"Row {row_idx + 1}")
-                            
-                        except Exception as e:
-                            st.error(f"Error updating row {row_idx + 1}: {e}")
-                    
-                    # Handle new rows (if edited_data has more rows than original_data)
-                    if len(edited_data) > len(original_data):
-                        for row_idx in range(len(original_data), len(edited_data)):
-                            try:
-                                new_row = edited_data.iloc[row_idx]
-                                
-                                # Convert new row to dict and handle data types
-                                insert_data = {}
-                                for col, value in new_row.items():
-                                    insert_data[col] = convert_to_python_type(value)
-                                
-                                # Ensure new row has a unique index
-                                if not insert_data.get('index'):
-                                    insert_data['index'] = str(uuid.uuid4())
-                                
-                                self.Equipment_select_options.insert_one(insert_data)
-                                insert_count += 1
-                                changes_detected.append(f"New row {row_idx + 1}")
-                                
-                            except Exception as e:
-                                st.error(f"Error inserting new row {row_idx + 1}: {e}")
-                    
-                    # Show results
-                    if update_count > 0 or insert_count > 0:
-                        if update_count > 0 and insert_count > 0:
-                            st.success(f"💾 **Successfully saved!** Updated {update_count} rows and added {insert_count} new rows.")
-                        elif update_count > 0:
-                            st.success(f"💾 **Successfully updated {update_count} rows!**")
-                        else:
-                            st.success(f"💾 **Successfully added {insert_count} new rows!**")
-                        
-                        with st.expander("📝 Show changed rows", expanded=False):
-                            st.write(f"**Modified:** {', '.join(changes_detected)}")
-                        
-                        # Reload the data to reflect changes
-                        with st.spinner('Refreshing data...'):
-                            self.Equipment_select_options_db_records = list(self.Equipment_select_options.find({}, {'_id': 0}))
-                            self.Equipment_select_options_db_df = pd.DataFrame(self.Equipment_select_options_db_records)
-                            
-                            # Ensure ID column exists and is properly formatted
-                            if not self.Equipment_select_options_db_df.empty:
-                                if 'ID' not in self.Equipment_select_options_db_df.columns:
-                                    # Create sequential ID starting from 1, convert to regular Python int
-                                    self.Equipment_select_options_db_df['ID'] = [int(i) for i in range(1, len(self.Equipment_select_options_db_df) + 1)]
-                                    
-                                    # Update MongoDB records to include ID
-                                    for idx, row in self.Equipment_select_options_db_df.iterrows():
-                                        self.Equipment_select_options.update_one(
-                                            {"index": row['index']}, 
-                                            {"$set": {"ID": row['ID']}}
-                                        )
-                            
-                            # Apply column order and prepare display data
-                            self.Equipment_select_options_db_df = self._apply_column_order(self.Equipment_select_options_db_df, 'select_options')
-                            self.display_select_options_df = self._prepare_display_data_select_options()
-                            
-                        st.rerun()
-                    else:
-                        st.info("📋 No changes detected - nothing to save.")
-            
-            # For non-edit users, show a read-only message and revert any changes
-            if not permissions["can_edit"]:
-                # Check if any changes were made by comparing with original data
-                if not self.edited_select_options_df.equals(self.display_select_options_df):
-                    st.info("ℹ️ **Read-Only Mode**: You can view dropdown options but cannot make changes. Contact an admin to modify data.")
-                    # Revert changes to prevent unauthorized modifications
-                    self.edited_select_options_df = self.display_select_options_df.copy()
-                else:
-                    st.info("👀 **Read-only mode** - You can view data but cannot make changes.")
-            
-            # Add row management below the grid (only for users with edit permissions)
-            if permissions["can_edit"]:
-                col1, col2, col3 = st.columns([1, 1, 2])
-                
-                with col1:
-                    if st.button("➕ Add New Row", key="add_select_options_row_btn"):
-                        import uuid  # Import at function level to ensure availability
-                        if 'newly_added_select_options_rows' not in st.session_state:
-                            st.session_state.newly_added_select_options_rows = []
-                        
-                        # Create a new row with appropriate default values
-                        new_row = {}
-                        if not self.display_select_options_df.empty:
-                            # Calculate next ID value
-                            max_id = self.display_select_options_df['ID'].max() if 'ID' in self.display_select_options_df.columns else 0
-                            next_id = max_id + 1
-                            
-                            for col in self.display_select_options_df.columns:
-                                col_lower = col.lower()
-                                if col == 'index':
-                                    new_row[col] = str(uuid.uuid4())
-                                elif col == 'ID':
-                                    new_row[col] = next_id
-                                elif any(pattern in col_lower for pattern in ['serial', 'ser_num', 'serial_number']):
-                                    new_row[col] = f"NEW_SERIAL_{len(st.session_state.newly_added_select_options_rows) + 1}"
-                                else:
-                                    new_row[col] = ""
-                        else:
-                            new_row = {"index": str(uuid.uuid4()), "ID": 1, "Name": "", "Value": ""}
-                        
-                        st.session_state.newly_added_select_options_rows.append(new_row)
-                        
-                        # Check if any serial columns exist to show relevant message
-                        serial_columns = [col for col in self.display_select_options_df.columns if any(term in col.lower() for term in ['serial', 'ser_num', 'serial_number'])]
-                        
-                        if serial_columns:
-                            st.success("✅ New row added! It appears at the top of the current page.")
-                            st.info(f"ℹ️ **Note**: Please ensure any serial numbers ({', '.join(serial_columns)}) are unique for better organization.")
-                        else:
-                            st.success("✅ New row added! It appears at the top of the current page.")
-                        st.rerun()
-                
-                with col2:
-                    if st.button("🗑️ Remove Selected", type="primary", key="delete_select_options_selected_btn"):
-                        if selected_rows is not None and len(selected_rows) > 0:
-                            if permissions.get("can_delete", True):  # Default to True for select options if not specified
-                                try:
-                                    # Handle different selected_rows formats
-                                    if isinstance(selected_rows, pd.DataFrame):
-                                        # Convert DataFrame to list of dictionaries
-                                        selected_rows = selected_rows.to_dict('records')
-                                    elif not isinstance(selected_rows, (list, tuple)):
-                                        st.error(f"❌ Invalid selected_rows type: {type(selected_rows)}")
-                                        return
-                                    
-                                    # Delete from database
-                                    delete_count = 0
-                                    errors = []
-                                    
-                                    for i, selected_row in enumerate(selected_rows):
-                                        try:
-                                            # Handle both dict and non-dict selected rows
-                                            if isinstance(selected_row, dict) and 'index' in selected_row:
-                                                result = self.Equipment_select_options.delete_one({"index": selected_row['index']})
-                                                if result.deleted_count > 0:
-                                                    delete_count += 1
-                                                else:
-                                                    errors.append(f"Row {i+1}: No document found with index {selected_row['index']}")
-                                            elif hasattr(selected_row, 'get') and selected_row.get('index'):
-                                                result = self.Equipment_select_options.delete_one({"index": selected_row['index']})
-                                                if result.deleted_count > 0:
-                                                    delete_count += 1
-                                                else:
-                                                    errors.append(f"Row {i+1}: No document found with index {selected_row.get('index')}")
-                                            else:
-                                                errors.append(f"Row {i+1}: Missing or invalid 'index' field - type: {type(selected_row)}, data: {selected_row}")
-                                        except Exception as e:
-                                            errors.append(f"Row {i+1}: Error - {str(e)}")
-                                    
-                                    if delete_count > 0:
-                                        st.success(f"🗑️ Deleted {delete_count} selected rows from the database.")
-                                        if errors:
-                                            st.warning(f"⚠️ {len(errors)} row(s) had issues: {'; '.join(errors[:3])}{'...' if len(errors) > 3 else ''}")
-                                        
-                                        # Reload data
-                                        self.Equipment_select_options_db_records = list(self.Equipment_select_options.find({}, {'_id': 0}))
-                                        self.Equipment_select_options_db_df = pd.DataFrame(self.Equipment_select_options_db_records)
-                                        if 'index' not in self.Equipment_select_options_db_df.columns:
-                                            self.Equipment_select_options_db_df['index'] = self.Equipment_select_options_db_df.index
-                                        
-                                        # Reassign sequential IDs after deletion to maintain continuity
-                                        if not self.Equipment_select_options_db_df.empty:
-                                            self.Equipment_select_options_db_df['ID'] = [int(i) for i in range(1, len(self.Equipment_select_options_db_df) + 1)]
-                                            # Update IDs in database
-                                            for idx, row in self.Equipment_select_options_db_df.iterrows():
-                                                if 'index' in row and pd.notna(row['index']):
-                                                    self.Equipment_select_options.update_one(
-                                                        {"index": row['index']},
-                                                        {"$set": {"ID": row['ID']}}
-                                                    )
-                                            
-                                            # Sort by ID after reassignment
-                                            try:
-                                                self.Equipment_select_options_db_df = self.Equipment_select_options_db_df.sort_values(
-                                                    by='ID', ascending=True, na_position='last'
-                                                ).reset_index(drop=True)
-                                            except Exception:
-                                                pass
-                                        
-                                        # Apply admin-saved column order after data reload
-                                        self.Equipment_select_options_db_df = self._apply_column_order(self.Equipment_select_options_db_df, 'select_options')
-                                        
-                                        # Clear selection and force grid reload
-                                        if 'select_all_select_options_rows' in st.session_state:
-                                            del st.session_state['select_all_select_options_rows']
-                                        st.session_state['select_all_select_options_active'] = False
-                                        st.session_state['force_select_options_grid_reload'] = True
-                                        st.session_state['select_options_grid_key'] = st.session_state.get('select_options_grid_key', 0) + 1
-                                        # No st.rerun() needed - grid reload mechanism will handle the refresh
-                                    else:
-                                        error_msg = f"❌ Failed to delete selected rows. Errors: {'; '.join(errors[:5])}{'...' if len(errors) > 5 else ''}"
-                                        st.error(error_msg)
-                                except Exception as e:
-                                    st.error(f"❌ Error during deletion: {str(e)}")
-                            else:
-                                st.error("🚫 You don't have permission to delete rows.")
-                        else:
-                            st.warning("⚠️ Please select rows first in order to delete them.")
-                
-                with col3:
-                    # Add download selected option for admin (always show button)
-                    if st.session_state.get("user_role") == "admin":
-                        if selected_rows is not None and len(selected_rows) > 0:
-                            selected_df = pd.DataFrame(selected_rows)
-                            selected_csv = selected_df.to_csv(index=False)
-                            st.download_button(
-                                label=f"📤 Download Selected ({len(selected_rows)} rows)",
-                                data=selected_csv,
-                                file_name="selected_select_options.csv",
-                                mime="text/csv",
-                                key="download_select_options_selected_btn"
-                            )
-                        else:
-                            st.button(
-                                "📤 Download Selected (0 rows)", 
-                                disabled=True, 
-                                key="download_select_options_selected_disabled_btn",
-                                help="Select rows first to enable download"
-                            )
-        #########################################
-    def Equipment_Filters(self):
-        # --- Inline filter column (not sidebar) ---
-        # Print the current filter state
-        st.markdown('**🔍Equipment_Filters:**')
-        
-        # Handle case where DataFrame is empty or None
-        if self.df is None or self.df.empty:
-            st.info("📋 No equipment records found in the database. Add some data to get started!")
-            st.markdown("### Equipment Records")
-            st.write("Database is empty. Please add some equipment records.")
-            return
-        
-        # Ensure column types are identified for sorting
-        self._identify_column_types()
-        
-        filter_columns = {}
-        filtered_df = self.df.copy()
-        filter_widgets = []
-        filter_cols = []
-        
-        # Load saved excluded columns preference or use default
-        default_excluded_cols = ["ID", "check", "uuid"]  # Default excluded columns
-        excluded_filter_cols = self._load_excluded_filter_columns(default_excluded_cols)
-
-        # Get ALL filterable columns (not just specific types)
-        all_filterable_columns = []
-        for col in filtered_df.columns:
-            if col not in excluded_filter_cols:
-                all_filterable_columns.append(col)
-
-        # Load saved filter order preference
-        ordered_filters = self._load_filter_order(all_filterable_columns)
-        
-        # Build filter_cols in the saved order
-        for col in ordered_filters:
-            if col in filtered_df.columns and col not in excluded_filter_cols:
-                filter_cols.append(col)
-
-        left_col, right_col = st.columns([1, 4])
-        with left_col:
-            # Track current filter state to detect changes
-            current_filter_state = {}
-            filter_changed = False
-            search_text = st.text_input('🔍 Search', key='equipment_search')
-            current_filter_state['equipment_search'] = search_text
-            if search_text:
-                mask = pd.Series([False] * len(filtered_df))
-                for col in self.search_cols:
-                    if col in filtered_df.columns:
-                        mask |= filtered_df[col].astype(str).str.contains(search_text, case=False, na=False)
-                filtered_df = filtered_df[mask]
-
-            for col_name in filter_cols:
-                options = ['All'] + sorted([str(val) for val in filtered_df[col_name].dropna().unique() if str(val).strip() != ''])
-                selected = st.selectbox(f"{col_name}", options, key=f'equipment_{col_name}')
-                filter_columns[col_name] = selected
-                current_filter_state[f'equipment_{col_name}'] = selected
-                if selected != 'All':
-                    filtered_df = filtered_df[filtered_df[col_name] == selected]
-            
-
-            
-            # Check if filters have changed
-            if 'previous_filter_state' not in st.session_state:
-                st.session_state['previous_filter_state'] = {}
-            
-            if st.session_state['previous_filter_state'] != current_filter_state:
-                filter_changed = True
-                st.session_state['previous_filter_state'] = current_filter_state
-                
-                # If we were in select all mode and filters changed, update the selection
-                if 'select_all_rows' in st.session_state:
-                    # Set flag to reapply select all after filtering
-                    st.session_state['reapply_select_all'] = True
- 
-        with right_col:
-            # Include any newly added rows from session state that haven't been saved yet
-            if 'newly_added_rows' in st.session_state and st.session_state.newly_added_rows:
-                # Convert newly added rows to DataFrame
-                new_rows_df = pd.DataFrame(st.session_state.newly_added_rows)
-                # Ensure they have the same columns as filtered_df
-                for col in filtered_df.columns:
-                    if col not in new_rows_df.columns:
-                        new_rows_df[col] = None  # Use None instead of empty string
-                # Combine with filtered data - PUT NEW ROWS AT THE BEGINNING
-                self.display_df = pd.concat([new_rows_df, filtered_df], ignore_index=True)
-                # Apply admin-saved column order
-                self.display_df = self._apply_column_order(self.display_df, 'equipment')
-                
-                # Sort display_df by ID column consistently (including new rows)
-                if not self.display_df.empty and hasattr(self, 'unique_id_cols') and self.unique_id_cols:
-                    for id_col in self.unique_id_cols:
-                        if id_col in self.display_df.columns:
-                            try:
-                                # Enhanced sorting logic to handle different ID types better
-                                if pd.api.types.is_numeric_dtype(self.display_df[id_col]):
-                                    # Pure numeric column - sort numerically
-                                    self.display_df = self.display_df.sort_values(by=id_col, ascending=True, na_position='last').reset_index(drop=True)
-                                else:
-                                    # Mixed or string column - try to convert to numeric for sorting
-                                    self.display_df = self.display_df.sort_values(
-                                        by=id_col, 
-                                        ascending=True, 
-                                        na_position='last', 
-                                        key=lambda x: pd.to_numeric(x, errors='coerce').fillna(float('inf'))
-                                    ).reset_index(drop=True)
-                                break
-                            except Exception:
-                                continue
-                elif not self.display_df.empty:
-                    # Fallback: look for any column with 'id' in name
-                    id_columns = [col for col in self.display_df.columns if 'id' in col.lower() and col.lower() != '_id']
-                    if id_columns:
-                        id_col = id_columns[0]
-                        try:
-                            if pd.api.types.is_numeric_dtype(self.display_df[id_col]):
-                                self.display_df = self.display_df.sort_values(by=id_col, ascending=True, na_position='last').reset_index(drop=True)
-                            else:
-                                self.display_df = self.display_df.sort_values(
-                                    by=id_col, 
-                                    ascending=True, 
-                                    na_position='last', 
-                                    key=lambda x: pd.to_numeric(x, errors='coerce').fillna(float('inf'))
-                                ).reset_index(drop=True)
-                        except Exception:
-                            pass
-                
-                # Check if we need to reapply select all after filtering (with new rows)
-                if 'reapply_select_all' in st.session_state and st.session_state['reapply_select_all']:
-                    # Update the select all rows with the new filtered data including new rows
-                    st.session_state['select_all_rows'] = self.display_df.to_dict('records')
-                    st.session_state['reapply_select_all'] = False
-                    # Force grid reload to show the new selection
-                    st.session_state['force_grid_reload'] = True
-                    st.session_state['grid_key'] = st.session_state.get('grid_key', 0) + 1
-            else:
-                self.display_df = filtered_df if filtered_df is not None else self.df
-                # Apply admin-saved column order
-                self.display_df = self._apply_column_order(self.display_df, 'equipment')
-            
-            # Sort display_df by ID column consistently
-            if not self.display_df.empty and hasattr(self, 'unique_id_cols') and self.unique_id_cols:
-                for id_col in self.unique_id_cols:
-                    if id_col in self.display_df.columns:
-                        try:
-                            # Enhanced sorting logic to handle different ID types better
-                            if pd.api.types.is_numeric_dtype(self.display_df[id_col]):
-                                # Pure numeric column - sort numerically
-                                self.display_df = self.display_df.sort_values(by=id_col, ascending=True, na_position='last').reset_index(drop=True)
-                            else:
-                                # Mixed or string column - try to convert to numeric for sorting
-                                self.display_df = self.display_df.sort_values(
-                                    by=id_col, 
-                                    ascending=True, 
-                                    na_position='last', 
-                                    key=lambda x: pd.to_numeric(x, errors='coerce').fillna(float('inf'))
-                                ).reset_index(drop=True)
-                            break
-                        except Exception as e:
-                            continue
-            elif not self.display_df.empty:
-                # Fallback: look for any column with 'id' in name
-                id_columns = [col for col in self.display_df.columns if 'id' in col.lower() and col.lower() != '_id']
-                if id_columns:
-                    id_col = id_columns[0]
-                    try:
-                        if pd.api.types.is_numeric_dtype(self.display_df[id_col]):
-                            self.display_df = self.display_df.sort_values(by=id_col, ascending=True, na_position='last').reset_index(drop=True)
-                        else:
-                            self.display_df = self.display_df.sort_values(
-                                by=id_col, 
-                                ascending=True, 
-                                na_position='last', 
-                                key=lambda x: pd.to_numeric(x, errors='coerce').fillna(float('inf'))
-                            ).reset_index(drop=True)
-                    except Exception:
-                        pass
-            
-            # Check if we need to reapply select all after filtering
-            if 'reapply_select_all' in st.session_state and st.session_state['reapply_select_all']:
-                # Update the select all rows with the new filtered data
-                st.session_state['select_all_rows'] = self.display_df.to_dict('records')
-                st.session_state['reapply_select_all'] = False
-                # Force grid reload to show the new selection
-                st.session_state['force_grid_reload'] = True
-                st.session_state['grid_key'] = st.session_state.get('grid_key', 0) + 1
-            
-            st.subheader("📊 Equipment Records")
-            
-            # Add custom Select All / Clear Selection buttons at the top
-            col1, col2, col3, col4 = st.columns([1, 1, 1, 2])
-            with col1:
-                if st.button("☑️ Select All Visible", key="select_all_btn", help="Select all rows currently visible (after all filtering) - selection will be maintained when filtering"):
-                    # Store only the currently visible/filtered rows in session state
-                    st.session_state['select_all_rows'] = self.display_df.to_dict('records')
-                    # Also store the visible data as our working dataset when in select all mode
-                    st.session_state['select_all_active'] = True
-                    # Force grid reload and increment key to force visual update
-                    st.session_state['force_grid_reload'] = True
-                    st.session_state['grid_key'] = st.session_state.get('grid_key', 0) + 1
-                    st.rerun()
-            
-            with col2:
-                if st.button("⬜ Clear Selection", key="clear_selection_btn", help="Clear all selected rows"):
-                    # Clear the selection by removing from session state
-                    if 'select_all_rows' in st.session_state:
-                        del st.session_state['select_all_rows']
-                    if 'select_all_active' in st.session_state:
-                        del st.session_state['select_all_active']
-                    # Force grid reload and increment key to force visual update
-                    st.session_state['force_grid_reload'] = True
-                    st.session_state['grid_key'] = st.session_state.get('grid_key', 0) + 1
-                    st.rerun()
-            
-            with col3:
-                # Add refresh button for when user finishes AgGrid filtering
-                if st.button("🔄 Refresh Selection", key="refresh_selection_btn", help="Update selection to match current AgGrid filters"):
-                    if 'select_all_rows' in st.session_state:
-                        # Update select all to include only currently visible rows (will be corrected after grid renders)
-                        st.session_state['refresh_selection_requested'] = True
-                        st.success("🔄 Selection will be updated after grid renders!")
-                        st.rerun()
-                    # st.info("💡 Click 'Select All Visible' first to enable selection tracking")
-            
-            # Get dropdown options from Equipment Select Options DB
-            def get_dropdown_options(col):
-                # Always fetch fresh data from Equipment Select Options collection
-                try:
-                    select_options_records = list(self.Equipment_select_options.find({}, {'_id': 0, col: 1}))
-                    if select_options_records:
-                        select_options_df = pd.DataFrame(select_options_records)
-                        if col in select_options_df.columns:
-                            return sorted([
-                                str(x) for x in select_options_df[col].dropna().unique()
-                                if str(x).strip()
-                            ])
-                except Exception:
-                    pass
-                
-                # Fallback to unique values from current data
-                return sorted([
-                    str(x) for x in self.display_df[col].dropna().unique()
-                    if str(x).strip()
-                ])
-            
-            # Get user permissions
-            permissions = self.auth_manager.get_user_permissions()
-            # Print permissions for debugging
-            # st.write("User Permissions:", permissions)
-
-            # Configure AgGrid
-            gb = GridOptionsBuilder.from_dataframe(self.display_df)
-            
-            # Enable editing based on permissions
-            gb.configure_default_column(
-                editable=permissions["can_edit"], 
-                groupable=True, 
-                resizable=True, 
-                sortable=True, 
-                filter=True
-            )
-            
-            # Configure specific columns with dropdown functionality
-            for col in self.display_df.columns:
-                col_lower = col.lower()
-                
-                # Calculate dynamic width based on column name length
-                col_name_length = len(col)
-                min_width = max(80, col_name_length * 8)
-                
-                # ID columns - make read-only with smaller width
-                if any(term in col_lower for term in ['id', '_id']):
-                    gb.configure_column(col, editable=False, width=min_width, minWidth=60, maxWidth=120)
-                
-                # Serial number columns - add validation styling
-                elif any(term in col_lower for term in ['serial', 'ser_num', 'serial_number']):
-                    gb.configure_column(
-                        col, 
-                        editable=permissions["can_edit"],  # Explicitly set editable for serial columns
-                        width=max(min_width, 160), 
-                        minWidth=120, 
-                        maxWidth=200,
-                        cellStyle={'backgroundColor': '#fff3cd', 'border': '1px solid #ffeaa7'},  # Light yellow background to indicate validation
-                        headerTooltip=f"Serial numbers must be unique. Duplicates will prevent saving."
-                    )
-                
-                # Dropdown columns - dynamically check if column should have dropdown
-                elif self._should_have_dropdown(col):
-                    # Check if this is a checkbox-type column that should be freely editable
-                    if self._is_checkbox_column(col):
-                        # Checkbox columns should be freely editable text fields
-                        gb.configure_column(
-                            col, 
-                            editable=permissions["can_edit"],  # Respect permissions
-                            width=max(min_width, 120), 
-                            minWidth=80, 
-                            maxWidth=150, 
-                            wrapText=True, 
-                            autoHeight=True
-                        )
-                    else:
-                        # Regular dropdown columns
-                        dropdown_options = get_dropdown_options(col)
-                        # Always show dropdown editor for better UX, but control actual editing through validation
-                        gb.configure_column(
-                            col, 
-                            editable=True,  # Always true to show dropdown
-                            cellEditor='agSelectCellEditor',
-                            cellEditorParams={'values': dropdown_options},
-                            width=max(min_width, 150), 
-                            minWidth=100, 
-                            maxWidth=200, 
-                            wrapText=True, 
-                            autoHeight=True
-                        )
-                
-                # Medium text columns
-                elif any(term in col_lower for term in ['model']):
-                    gb.configure_column(
-                        col, 
-                        editable=permissions["can_edit"],  # Explicitly set editable
-                        width=max(min_width, 180), 
-                        minWidth=120, 
-                        maxWidth=250, 
-                        wrapText=True, 
-                        autoHeight=True
-                    )
-                
-                # Long text columns
-                elif any(term in col_lower for term in ['description', 'comments']):
-                    gb.configure_column(
-                        col, 
-                        editable=permissions["can_edit"],  # Explicitly set editable
-                        width=max(min_width, 250), 
-                        minWidth=150, 
-                        maxWidth=400, 
-                        wrapText=True, 
-                        autoHeight=True
-                    )
-                
-                # Date columns
-                elif any(term in col_lower for term in ['date', 'cal']):
-                    gb.configure_column(
-                        col, 
-                        editable=permissions["can_edit"],  # Explicitly set editable
-                        width=max(min_width, 130), 
-                        minWidth=100, 
-                        maxWidth=160
-                    )
-                
-                # Numeric columns
-                elif any(term in col_lower for term in ['value', 'price', 'cost', 'year']):
-                    gb.configure_column(
-                        col, 
-                        editable=permissions["can_edit"],  # Explicitly set editable
-                        width=max(min_width, 120), 
-                        minWidth=80, 
-                        maxWidth=150
-                    )
-                
-                # Default for other columns
-                else:
-                    gb.configure_column(
-                        col, 
-                        editable=permissions["can_edit"],  # Explicitly set editable for new columns
-                        width=max(min_width, 160), 
-                        minWidth=100, 
-                        maxWidth=300, 
-                        wrapText=True, 
-                        autoHeight=True
-                    )
-            
-            # Enable selection (with checkboxes for row selection)
-            gb.configure_selection(selection_mode="multiple", use_checkbox=True)
-            
-            # Enable pagination
-            gb.configure_pagination(enabled=True, paginationPageSize=20)
-            
-            # Configure grid options for better checkbox functionality
-            gb.configure_grid_options(
-                suppressColumnVirtualisation=False,
-                suppressRowVirtualisation=False,
-                enableRangeSelection=True,
-                rowSelection='multiple',
-                rowMultiSelectWithClick=True,  # Enable multi-select
-                suppressRowDeselection=False,  # Allow deselection
-                animateRows=True,
-                suppressMovableColumns=False,
-                enableCellTextSelection=True,
-                headerHeight=40,  # Ensure header is tall enough for checkbox
-                checkboxSelection=True  # Explicitly enable checkbox selection
-            )
-            
-            # Pre-select rows if we're in "select all" mode
-            if 'select_all_rows' in st.session_state:
-                # Add JavaScript to select all visible rows on grid ready
-                pre_select_js = """
-                function onGridReady(params) {
-                    setTimeout(function() {
-                        params.api.selectAll();
-                    }, 100);
-                }
-                """
-                gb.configure_grid_options(
-                    onGridReady=JsCode(pre_select_js)
-                )
-            
-            # Enable adding new rows (only for users with edit permissions)
-            if permissions["can_edit"]:
-                gb.configure_grid_options(
-                    enableRangeSelection=True,
-                    rowSelection='multiple',
-                    suppressRowClickSelection=False
-                )
-            
-            # Check for select all mode and force grid reload if needed
-            force_reload = 'force_grid_reload' in st.session_state and st.session_state['force_grid_reload']
-            if force_reload:
-                st.session_state['force_grid_reload'] = False
-            
-            # Determine what data to display in AgGrid
-            # If we're in select all mode and have filtered data, use that instead of full display_df
-            grid_data = self.display_df
-            if (st.session_state.get('select_all_active', False) and 
-                'select_all_rows' in st.session_state and
-                len(st.session_state['select_all_rows']) < len(self.display_df)):
-                # We're in select all mode with filtered data - create DataFrame from selected rows
-                grid_data = pd.DataFrame(st.session_state['select_all_rows'])
-                # Ensure it has the same column order as display_df
-                if not grid_data.empty:
-                    grid_data = grid_data.reindex(columns=self.display_df.columns, fill_value=None)
-            
-            # Display the AgGrid
-            grid_response = AgGrid(
-                grid_data,
-                gridOptions=gb.build(),
-                data_return_mode=DataReturnMode.FILTERED_AND_SORTED,
-                update_mode=GridUpdateMode.MODEL_CHANGED,
-                allow_unsafe_jscode=True,
-                fit_columns_on_grid_load=False,
-                height=600,
-                theme='streamlit',
-                enable_enterprise_modules=False,
-                reload_data=force_reload,
-                key=f"equipment_grid_{st.session_state.get('grid_key', 0)}"
-            )
-            
-            # Get the selected rows for use in row management below
-            selected_rows = grid_response['selected_rows']
-            
-            # Get the currently visible/filtered data from AgGrid (after internal filtering)
-            visible_data = grid_response['data']  # This contains only the rows visible after AgGrid filtering
-            
-            # Handle refresh selection request with actual visible data
-            if st.session_state.get('refresh_selection_requested', False):
-                if 'select_all_rows' in st.session_state:
-                    # Update select all to include only currently visible rows
-                    st.session_state['select_all_rows'] = visible_data.to_dict('records')
-                    st.session_state['select_all_active'] = True
-                    # Force grid reload and increment key to force visual update
-                    st.session_state['force_grid_reload'] = True
-                    st.session_state['grid_key'] = st.session_state.get('grid_key', 0) + 1
-                st.session_state['refresh_selection_requested'] = False  # Clear the flag
-            
-            # Check if AgGrid filtering resulted in empty data and we should show a message
-            if len(visible_data) == 0 and len(grid_data) > 0:
-                st.session_state['show_empty_filter_message'] = True
-            
-            # Track AgGrid internal filtering changes more conservatively
-            # Only track significant changes, not every interaction
-            current_visible_count = len(visible_data)
-            
-            # Create a more stable signature that doesn't change on every interaction
-            if current_visible_count > 0:
-                # Use only count and a hash of the index to avoid constant changes
-                visible_signature = f"count_{current_visible_count}"
-            else:
-                visible_signature = "empty"
-            
-            # Initialize tracking if not exists
-            if 'previous_visible_signature' not in st.session_state:
-                st.session_state['previous_visible_signature'] = visible_signature
-                st.session_state['signature_stable_count'] = 0
-            
-            # Only update selection if we're in select all mode - simplified logic
-            if 'select_all_rows' in st.session_state and st.session_state['previous_visible_signature'] != visible_signature:
-                # Only update if we have visible data (not empty)
-                if current_visible_count > 0:
-                    # Normal case: update select all to only include currently visible rows
-                    st.session_state['select_all_rows'] = visible_data
-                    st.session_state['select_all_active'] = True
-                    # Set flag to show notification about automatic update
-                    st.session_state['selection_auto_updated'] = True
-                else:
-                    # Empty results - clear select all mode
-                    if 'select_all_rows' in st.session_state:
-                        del st.session_state['select_all_rows']
-                    if 'select_all_active' in st.session_state:
-                        del st.session_state['select_all_active']
-            
-            # Update the tracked signature
-            st.session_state['previous_visible_signature'] = visible_signature
-            
-            # Check if we're in "select all" mode and override selected_rows
-            if 'select_all_rows' in st.session_state:
-                selected_rows = st.session_state['select_all_rows']
-            
-            # Show notification if selection was automatically updated due to filtering
-            if st.session_state.get('selection_auto_updated', False):
-                st.success("🔄 **Selection automatically updated** to match filtered results!")
-                st.session_state['selection_auto_updated'] = False  # Clear the flag
-            
-            # Show notification if showing all data due to empty AgGrid filters
-            if st.session_state.get('show_empty_filter_message', False):
-                st.info("📄 **Showing all data** - AgGrid filters resulted in no matches, displaying complete dataset")
-                st.session_state['show_empty_filter_message'] = False  # Clear the flag
-            
-            # Display selection help
-            if selected_rows is not None and len(selected_rows) > 0:
-                if 'select_all_rows' in st.session_state:
-                    st.info(f"✅ **ALL {len(selected_rows)} row(s) selected** (Select All mode - automatically adapts to sidebar filters, use 'Refresh Selection' after AgGrid column filtering) - Use the buttons below for bulk operations")
-                else:
-                    st.info(f"✅ **{len(selected_rows)} row(s) selected** ")
-            
-            # Get edited data from AgGrid
-            self.edited_df = grid_response['data']
-            
-            # Real-time validation for serial numbers (for edit users only)
-            if permissions["can_edit"]:
-                is_valid, error_messages, duplicate_serials = self._validate_serials_in_realtime()
-                if not is_valid:
-                    st.error("🚫 **Serial Number Validation Error**")
-                    for error_msg in error_messages:
-                        st.error(error_msg)
-                    st.warning("⚠️ **You must fix these duplicate serial numbers before saving changes to the database.**")
-            
-            # For non-edit users, show a read-only message and revert any changes
-            if not permissions["can_edit"]:
-                # Check if any changes were made by comparing with original data
-                if not self.edited_df.equals(self.display_df):
-                    st.info("ℹ️ **Read-Only Mode**: You can view dropdown options but cannot make changes. Contact an admin to modify data.")
-                    # Revert changes to prevent unauthorized modifications
-                    self.edited_df = self.display_df.copy()
-                else:
-                    st.info("ℹ️ **Read-Only Mode**: You can view dropdown options by clicking on cells, but cannot make changes.")
-            
-            # Save Changes button (only for users with edit permissions)
-            if permissions.get("can_edit", False):
-                if st.button("💾 Save Changes to Database", key="save_changes_btn"):
-                    self.Save_Equipment_Records_Changes_to_Database()
-            
-            # Add row management below the grid (only for users with edit permissions)
-            if permissions["can_edit"]:
-                col1, col2, col3 = st.columns([1, 1, 2])
-                
-                with col1:
-                    if st.button("➕ Add New Row", key="add_row_btn"):
-                        # Create a new empty row with default values
-                        new_row = {}
-                        for col in self.display_df.columns:
-                            col_lower = col.lower()
-                            
-                            # Check if this is any kind of ID column
-                            if any(term in col_lower for term in ['id', '_id']):
-                                # Handle different ID types dynamically
-                                if (col_lower == 'id' or col_lower.endswith('_id') or col_lower.startswith('id_')) and 'uuid' not in col_lower and 'serial' not in col_lower:
-                                    # Auto-increment for id type columns (but not uuid or serial)
-                                    max_id = self.display_df[col].max() if not self.display_df[col].empty else 0
-                                    new_row[col] = max_id + 1 if pd.notna(max_id) else 1
-                                elif any(pattern in col_lower for pattern in ['uuid', 'unique_id', 'unique id']):
-                                    # Generate new UUID for uuid type columns
-                                    import uuid
-                                    new_row[col] = str(uuid.uuid4())
-                                elif any(pattern in col_lower for pattern in ['serial', 'ser_num', 'serial_number']):
-                                    # For serial numbers, leave empty (user will fill)
-                                    new_row[col] = None
-                                else:
-                                    # Other ID columns get empty string or None
-                                    new_row[col] = None
-                            else:
-                                # All non-ID columns default to None (will display as empty)
-                                new_row[col] = None
-                        
-                        # Add the new row at the BEGINNING of display_df for immediate visibility on current page
-                        new_row_df = pd.DataFrame([new_row])
-                        self.display_df = pd.concat([new_row_df, self.display_df], ignore_index=True)
-                        # Apply admin-saved column order
-                        self.display_df = self._apply_column_order(self.display_df, 'equipment')
-                        
-                        # Also add to main dataframes for persistence (at the end for consistency)
-                        self.df = pd.concat([self.df, new_row_df], ignore_index=True)
-                        self.db_df = pd.concat([self.db_df, new_row_df], ignore_index=True)
-                        # Apply admin-saved column order
-                        self.df = self._apply_column_order(self.df, 'equipment')
-                        self.db_df = self._apply_column_order(self.db_df, 'equipment')
-                        
-                        # Store in session state to persist through filters (insert at beginning)
-                        if 'newly_added_rows' not in st.session_state:
-                            st.session_state.newly_added_rows = []
-                        st.session_state.newly_added_rows.insert(0, new_row)  # Insert at beginning
-                        
-                        # Check if any serial columns exist to show relevant message
-                        serial_columns = [col for col in self.display_df.columns if any(term in col.lower() for term in ['serial', 'ser_num', 'serial_number'])]
-                        
-                        if serial_columns:
-                            st.success("✅ New row added! It appears at the top of the current page.")
-                            st.info(f"ℹ️ **Note**: Please ensure any serial numbers ({', '.join(serial_columns)}) are unique before saving to the database.")
-                        else:
-                            st.success("✅ New row added! It appears at the top of the current page.")
-                        st.rerun()
-                
-                with col2:
-                    if st.button("🗑️ Remove Selected", type="primary", key="delete_selected_btn"):
-                        if selected_rows is not None and len(selected_rows) > 0:
-                            if permissions["can_delete"]:
-                                # Convert selected rows to DataFrame for easier manipulation
-                                selected_df = pd.DataFrame(selected_rows)
-                                
-                                # Delete from database first
-                                deleted_count = 0
-                                for idx, row in selected_df.iterrows():
-                                    # Use generic method to create delete query
-                                    delete_query = self._create_delete_query(row)
-                                    
-                                    if delete_query:
-                                        # Delete from MongoDB
-                                        result = self.Equipment_collection.delete_one(delete_query)
-                                        if result.deleted_count > 0:
-                                            deleted_count += 1
-                                
-                                # Remove from local DataFrames using the best unique identifier
-                                deleted_from_local = 0
-                                for col in self.unique_id_cols:
-                                    if col in selected_df.columns:
-                                        values_to_delete = self._get_values_for_deletion(selected_df, col)
-                                        if values_to_delete:
-                                            # Delete from all DataFrames
-                                            self.display_df = self.display_df[~self.display_df[col].isin(values_to_delete)]
-                                            self.df = self.df[~self.df[col].isin(values_to_delete)]
-                                            self.db_df = self.db_df[~self.db_df[col].isin(values_to_delete)]
-                                            deleted_from_local = len(values_to_delete)
-                                            break  # Use the first available unique identifier
-                                
-                                # If no unique identifier worked, fallback to index-based deletion
-                                if deleted_from_local == 0:
-                                    indices_to_delete = selected_df.index.tolist()
-                                    self.display_df = self.display_df.drop(indices_to_delete).reset_index(drop=True)
-                                    self.df = self.df.drop(indices_to_delete).reset_index(drop=True)
-                                    self.db_df = self.db_df.drop(indices_to_delete).reset_index(drop=True)
-                                    deleted_from_local = len(indices_to_delete)
-                                
-                                # Also remove from newly added rows in session state if they exist there
-                                if 'newly_added_rows' in st.session_state and st.session_state.newly_added_rows:
-                                    # Filter out deleted rows from session state using any available unique identifier
-                                    remaining_new_rows = []
-                                    for new_row in st.session_state.newly_added_rows:
-                                        should_keep = True
-                                        for idx, selected_row in selected_df.iterrows():
-                                            # Check using any unique identifier
-                                            for id_col in self.unique_id_cols:
-                                                if (id_col in new_row and id_col in selected_row and 
-                                                    new_row[id_col] == selected_row[id_col] and
-                                                    pd.notna(new_row[id_col])):
-                                                    should_keep = False
-                                                    break
-                                            if not should_keep:
-                                                break
-                                        if should_keep:
-                                            remaining_new_rows.append(new_row)
-                                    st.session_state.newly_added_rows = remaining_new_rows
-                                
-                                st.success(f"🗑️ Deleted {deleted_count} row(s) from database and {len(selected_rows)} row(s) from display!")
-                                # Clear custom selection after deletion and force grid reload
-                                if 'select_all_rows' in st.session_state:
-                                    del st.session_state['select_all_rows']
-                                if 'select_all_active' in st.session_state:
-                                    del st.session_state['select_all_active']
-                                st.session_state['force_grid_reload'] = True
-                                st.session_state['grid_key'] = st.session_state.get('grid_key', 0) + 1
-                                st.rerun()
-                            else:
-                                st.error("🚫 You don't have permission to delete rows.")
-                        else:
-                            st.warning("⚠️ Please select rows first in order to delete them.")
-                
-                with col3:
-                    # Add download selected option for admin (always show button)
-                    if st.session_state.get("user_role") == "admin":
-                        if selected_rows is not None and len(selected_rows) > 0:
-                            selected_df = pd.DataFrame(selected_rows)
-                            selected_csv = selected_df.to_csv(index=False)
-                            st.download_button(
-                                label="📤 Download Selected",
-                                data=selected_csv,
-                                file_name="selected_equipment_records.csv",
-                                mime="text/csv",
-                                key="download_selected_btn"
-                            )
-                        else:
-                            # Show button but with dummy data, and display warning when clicked
-                            dummy_csv = "No data selected"
-                            if st.download_button(
-                                label="📤 Download Selected",
-                                data=dummy_csv,
-                                file_name="no_selection.txt",
-                                mime="text/plain",
-                                key="download_selected_btn_empty"
-                            ):
-                                st.warning("⚠️ Please select rows first in order to download selected data.")
-
-                
-                # Add column management functions here
-                self.Add_New_Column_to_Equipment_records_DB()
-                self.rename_column_in_equipment_records_db()
-                if self._is_admin(): 
-                    self.delete_column_from_equeipment_records_db()
-        #########################################
-
-    def _validate_serials_in_realtime(self):
-        """
-        Validate serial numbers in real-time and provide immediate feedback.
-        Returns a tuple: (is_valid, error_messages, duplicate_serials)
-        """
-        if self.edited_df is None or self.edited_df.empty:
-            return True, [], []
-        
-        # Find serial columns
-        serial_columns = [col for col in self.edited_df.columns if any(term in col.lower() for term in ['serial', 'ser_num', 'serial_number'])]
-        
-        if not serial_columns:
-            return True, [], []
-        
-        error_messages = []
-        duplicate_serials = []
-        
-        for serial_col in serial_columns:
-            # Check for duplicates within the current dataframe
-            serials = self.edited_df[serial_col].dropna()  # Remove NaN/None values
-            serials = serials[serials != '']  # Remove empty strings
-            
-            if len(serials) != len(serials.unique()):
-                # Find duplicate values
-                duplicates = serials[serials.duplicated()].unique()
-                for dup in duplicates:
-                    duplicate_serials.append(f"{serial_col}: {dup}")
-                error_messages.append(f"❌ **{serial_col}**: Duplicate values found: {', '.join([str(d) for d in duplicates])}")
-        
-        is_valid = len(error_messages) == 0
-        return is_valid, error_messages, duplicate_serials
-
-    def _validate_unique_serials(self, df_to_check):
-        """
-        Validate that serial numbers are unique in the DataFrame.
-        Args:
-            df_to_check (pandas.DataFrame): DataFrame to validate
-        Returns:
-            tuple: (is_valid, duplicate_serials, error_message)
-        """
-        if not self.serial_cols:
-            # No serial columns identified, skip validation
-            return True, [], None
-        
-        serial_col = self.serial_cols[0]  # Use the first serial column
-        
-        if serial_col not in df_to_check.columns:
-            return True, [], None
-        
-        # Get non-empty serial numbers
-        serials = df_to_check[serial_col].dropna()
-        serials = serials[serials.astype(str).str.strip() != '']
-        
-        if serials.empty:
-            return True, [], None
-        
-        # Check for duplicates within the DataFrame
-        duplicates = serials[serials.duplicated(keep=False)]
-        
-        if not duplicates.empty:
-            duplicate_values = duplicates.unique().tolist()
-            error_msg = f"❌ Duplicate serial numbers found: {', '.join(map(str, duplicate_values))}"
-            return False, duplicate_values, error_msg
-        
-        return True, [], None
-    
-    def _validate_serials_against_database(self, df_to_check, exclude_current=True):
-        """
-        Validate that serial numbers don't already exist in the database.
-        Args:
-            df_to_check (pandas.DataFrame): DataFrame to validate
-            exclude_current (bool): Whether to exclude current records when checking
-        Returns:
-            tuple: (is_valid, existing_serials, error_message)
-        """
-        if not self.serial_cols:
-            return True, [], None
-        
-        serial_col = self.serial_cols[0]
-        
-        if serial_col not in df_to_check.columns:
-            return True, [], None
-        
-        # Get non-empty serial numbers from the DataFrame to check
-        serials_to_check = df_to_check[serial_col].dropna()
-        serials_to_check = serials_to_check[serials_to_check.astype(str).str.strip() != '']
-        
-        if serials_to_check.empty:
-            return True, [], None
-        
-        # Get current serials from database
-        try:
-            existing_records = list(self.Equipment_collection.find({serial_col: {"$exists": True, "$ne": None}}, {serial_col: 1}))
-            existing_serials = [str(record[serial_col]).strip() for record in existing_records 
-                             if record.get(serial_col) and str(record.get(serial_col)).strip()]
-            
-            if exclude_current and hasattr(self, 'display_df') and not self.display_df.empty:
-                # Exclude serials that are already in our current display DataFrame
-                current_serials = self.display_df[serial_col].dropna()
-                current_serials = [str(s).strip() for s in current_serials if str(s).strip()]
-                existing_serials = [s for s in existing_serials if s not in current_serials]
-            
-            # Check for conflicts
-            conflicts = []
-            for serial in serials_to_check:
-                serial_str = str(serial).strip()
-                if serial_str in existing_serials:
-                    conflicts.append(serial_str)
-            
-            if conflicts:
-                error_msg = f"❌ Serial numbers already exist in database: {', '.join(conflicts)}"
-                return False, conflicts, error_msg
-            
-        except Exception as e:
-            st.warning(f"Could not validate against database: {str(e)}")
-            return True, [], None
-        
-        return True, [], None
-
-    def Save_Equipment_Records_Changes_to_Database(self):
-        # Prevent accidental deletion if DataFrame is empty
-        if self.edited_df.empty:
-            st.error("Cannot save: No data to save. The table is empty.")
-            return
-        
-        # Validate unique serials within the DataFrame
-        is_valid_internal, duplicate_serials, internal_error = self._validate_unique_serials(self.edited_df)
-        if not is_valid_internal:
-            st.error(internal_error)
-            st.error("Please fix the duplicate serial numbers before saving.")
-            return
-        
-        # Validate serials against existing database records
-        is_valid_db, existing_serials, db_error = self._validate_serials_against_database(self.edited_df, exclude_current=True)
-        if not is_valid_db:
-            st.error(db_error)
-            st.error("Please use different serial numbers that don't already exist in the database.")
-            return
-        
-        # Determine unique key dynamically from available columns
-        unique_key = None
-        if hasattr(self, 'unique_id_cols') and self.unique_id_cols:
-            # Use the first available unique identifier column
-            for col in self.unique_id_cols:
-                if col in self.db_df.columns:
-                    unique_key = col
-                    break
-        
-        # Find changed rows only
-        original = self.display_df.reset_index(drop=True)
-        edited = self.edited_df.reset_index(drop=True)
-        
-        # Ensure both DataFrames have the same columns for comparison
-        common_cols = list(set(original.columns) & set(edited.columns))
-        if not common_cols:
-            st.error("No common columns found between original and edited data.")
-            return
-        
-        # Align the DataFrames to have the same columns in the same order
-        original_aligned = original[common_cols].reindex(columns=common_cols)
-        edited_aligned = edited[common_cols].reindex(columns=common_cols)
-        
-        # Compare the aligned DataFrames
-        changed_mask = (original_aligned != edited_aligned) & ~(original_aligned.isnull() & edited_aligned.isnull())
-        changed_rows = changed_mask.any(axis=1)
-        changed_df = edited[changed_rows]
-        
-        if changed_df.empty:
-            st.info("No changes detected.")
-            return
-        
-        # Only update or upsert the changed records
-        for idx, row in changed_df.iterrows():
-            if unique_key and pd.notna(row.get(unique_key)) and str(row.get(unique_key)).strip():
-                filter_query = {unique_key: row.get(unique_key)}
-            else:
-                # Use generic method to create filter query
-                filter_query = self._create_delete_query(row)
-            
-            update_query = {"$set": row.to_dict()}
-            self.Equipment_collection.update_one(filter_query, update_query, upsert=True)
-        
-        # Clear newly added rows from session state since they're now saved
-        if 'newly_added_rows' in st.session_state:
-            st.session_state.newly_added_rows = []
-        
-        st.success(f"Saved {len(changed_df)} changed records to the database.")
-
-
-
-
-
-
     def run(self):
-        """Main method to run the application."""
+        """Main method to run the application with ultra-aggressive anti-fading."""
+        
+        # No need to handle logout completion since we use rerun directly
 
         try:
             client = MongoClient("mongodb://ascy00075.sc.altera.com:27017/mongo?readPreference=primary&ssl=false")
@@ -4363,23 +1380,9 @@ class EquipmentManagementApp:
             st.error(f"MongoDB connection failed: {e}")
             st.stop()
 
-
         db = client["Equipment_DB"]
         self.Equipment_collection = db["Equipment"]
         self.Equipment_select_options = db["Equipment_select_options"]
-
-        # Initialize self.display_df from CSV before using it in init_db_Equipment_select_options
-    
-        # self.init_db_Equipment_select_options()  # COMMENTED OUT: Prevent re-import after deletion
-
-        #############################################################
-        # Always work with the data in the db (initialize self.df before any DB-dependent UI)
-        # db_records = list(self.Equipment_collection.find({}, {'_id': 0}))
-        # self.db_df = pd.DataFrame(db_records)
-        # # Sort by 'act_id' if present
-        # if 'act_id' in self.db_df.columns:
-        #     self.db_df = self.db_df.sort_values(by='act_id', ascending=True, na_position='last').reset_index(drop=True)
-        # self.df = self.db_df  # Ensure self.df is set for downstream code
 
         # Initialize session state and authentication
         self.auth_manager._initialize_session()
@@ -4389,17 +1392,20 @@ class EquipmentManagementApp:
             # User is authenticated, show main app
             self.configure_page()
             self.auth_manager.display_header(self.main_page_titel)
-
-            # Initialize data only when needed (lazy loading for better performance)
-            if 'equipment_data_loaded' not in st.session_state:
-                with st.spinner('Loading equipment data...'):
-                    self._initialize_equipment_data()
-                st.session_state.equipment_data_loaded = True
             
-            # Load Equipment Select Options data only if accessing that tab
-            if 'select_options_data_loaded' not in st.session_state:
-                self._initialize_select_options_data()
-                st.session_state.select_options_data_loaded = True
+            # Run automatic backup check for admin users
+            if run_automatic_backup_check:
+                try:
+                    backup_created, backup_message = run_automatic_backup_check(backup_interval_hours=0.1)
+                    if backup_created:
+                        st.session_state["backup_notification"] = f"✅ Automatic backup created: {backup_message}"
+                except Exception as e:
+                    # Silent error handling for automatic backups
+                    st.session_state["backup_error"] = f"Backup system error: {str(e)}"
+            
+            # Load Equipment Select Options data when accessing that tab
+            if self.select_options_system:
+                self.select_options_system._initialize_select_options_data()
 
             # Initialize current page in session state if not exists
             if 'current_page' not in st.session_state:
@@ -4430,355 +1436,36 @@ class EquipmentManagementApp:
             # Display the selected page content for admin users
             if self._is_admin():
                 if st.session_state.current_page == "Equipment Records":
-                    ##Equipment Records
-                    
-                    # Check if user needs password change first
-                    if self.auth_manager.user_needs_password_change(st.session_state.username):
-                        st.warning("⚠️ You must change your password before accessing the system.")
-                        self.auth_manager.password_change_page()
+                    # Import and use the standalone Equipment Records system
+                    try:
+                        from Equipment_Records_Page import EquipmentRecordsSystem
+                        equipment_records = EquipmentRecordsSystem()
+                        equipment_records.equipment_records_page()
+                    except ImportError:
+                        st.error("❌ Equipment Records system not available. Please ensure Equipment_Records_Page.py is accessible.")
+                        st.info("💡 Fallback: Using built-in equipment records functions.")
+                        
+                        # Check if user needs password change first
+                        if self.auth_manager.user_needs_password_change(st.session_state.username):
+                            st.warning("⚠️ You must change your password before accessing the system.")
+                            self.auth_manager.password_change_page()
+                            return
+
+                        # Fallback: Equipment Records functions are no longer available in main app
+                        st.error("❌ Equipment Records functionality is not available in fallback mode.")
+                        st.info("💡 Please ensure Equipment_Records_Page.py is accessible and properly configured.")
                         return
-
-                    # Use cached data instead of reloading from database
-                    if not hasattr(self, 'df') or self.df is None:
-                        # Fallback reload if cache is missing
-                        self._initialize_equipment_data()
-
-                    # Set db_df for compatibility
-                    self.db_df = self.df.copy() if hasattr(self, 'df') and not self.df.empty else pd.DataFrame()
-
-                    # Use the new Equipment_Filters function
-                    self.Equipment_Filters()
                     
                 elif st.session_state.current_page == "Equipment Select Options":
-                    #only admin can see 
-                    if self._is_admin():      
-                        st.session_state.current_tab = "Equipment Select Options"
-                        
-                        # Load Equipment Select Options data only when this tab is accessed
-                        if not hasattr(self, 'Equipment_select_options_db_df') or self.Equipment_select_options_db_df is None:
-                            with st.spinner('Loading select options data...'):
-                                self._initialize_select_options_data()
-                        
-                        # Process ID column and indexing only if data exists
-                        if not self.Equipment_select_options_db_df.empty:
-                            # Lazy ID column processing - only do this once per session
-                            if 'select_options_id_processed' not in st.session_state:
-                                with st.spinner('Setting up ID column...'):
-                                    self._process_select_options_id_column()
-                                st.session_state.select_options_id_processed = True
-                        
-                        # Sort DataFrame by ID column if it exists and is not empty
-                        if not self.Equipment_select_options_db_df.empty and 'ID' in self.Equipment_select_options_db_df.columns:
-                            try:
-                                # Sort by ID column in ascending order
-                                if pd.api.types.is_numeric_dtype(self.Equipment_select_options_db_df['ID']):
-                                    # Pure numeric column - sort numerically
-                                    self.Equipment_select_options_db_df = self.Equipment_select_options_db_df.sort_values(
-                                        by='ID', ascending=True, na_position='last'
-                                    ).reset_index(drop=True)
-                                else:
-                                    # Mixed or string column - try to convert to numeric for sorting
-                                    self.Equipment_select_options_db_df = self.Equipment_select_options_db_df.sort_values(
-                                        by='ID', 
-                                        ascending=True, 
-                                        na_position='last', 
-                                        key=lambda x: pd.to_numeric(x, errors='coerce').fillna(float('inf'))
-                                    ).reset_index(drop=True)
-                            except Exception as e:
-                                # If sorting fails, continue without sorting
-                                pass
-                        
-                        # Apply admin-saved column order (this will handle positioning of all columns including id and index)
-                        self.Equipment_select_options_db_df = self._apply_column_order(self.Equipment_select_options_db_df, 'select_options')
-
-                        self.Equipment_select_options_Filters() 
-
-                        # Column and Filter management for Equipment Select Options
-
-                        self.add_new_column_to_select_options_db()
-                        self.rename_column_in_select_options_db_ui()
-                        self.delete_column_from_select_options_db_ui()
-                        
-                        # Admin Downloads section
-                        st.markdown("### Admin Downloads")
-                        
-                        # Download Equipment Select Options button
-                        self.download_select_options_ui()
-                        
-                        # Web Management section for Equipment Records
-                        st.markdown("### Web Management")
-                        self.save_select_options_column_order_ui()
-                        self.save_select_options_filter_order_ui()
-                        # Equipment Records Column and Filter Order Management
-                        # col1, col2 = st.columns(2)
-                        # 
-                        # with col1:
-                        #     if st.button("💾 Save Equipment Column Order", key="save_eq_column_order_select_options"):
-                        #         self.save_equipment_column_order_ui()
-                        # 
-                        # with col2:
-                        #     if st.button("🔧 Save Equipment Filter Order", key="save_eq_filter_order_select_options"):
-                        #         self.save_equipment_filter_order_ui()
-
-                    # st.dataframe(
-                    #     self.Equipment_select_options_db_df,
-                    #     use_container_width=True
-                    # )
-                    # Backup and Restore page (only for admin users)
+                    # Only admin can see Equipment Select Options
                     if self._is_admin():
-                        st.session_state.current_tab = "Backup & Restore"
-                        
-                        # Show backup notifications if any
-                        if st.session_state.get("backup_notification"):
-                            st.success(st.session_state["backup_notification"])
-                            del st.session_state["backup_notification"]
-                        
-                        if st.session_state.get("backup_error"):
-                            st.error(st.session_state["backup_error"])
-                            del st.session_state["backup_error"]
-                            
-                            # Clean up invalid column names that might cause KeyErrors
-                            def clean_column_names(df):
-                                """Remove or rename invalid column names"""
-                                valid_columns = []
-                                for col in df.columns:
-                                    # Skip columns with invalid names
-                                    if pd.isna(col) or str(col).lower() in ['nan', 'none', ''] or str(col).strip() == '':
-                                        continue
-                                    valid_columns.append(col)
-                                return df[valid_columns]
-                            
-                            # Apply column cleaning
-                            original_data = clean_column_names(original_data)
-                            edited_data = clean_column_names(edited_data)
-                            
-                            # Ensure both DataFrames have 'index' column for matching
-                            if 'index' not in original_data.columns or 'index' not in edited_data.columns:
-                                st.error("Index column missing - cannot determine which records to update.")
-                                return
-                            
-                            # Convert index columns to string for reliable matching
-                            original_data['index'] = original_data['index'].astype(str)
-                            edited_data['index'] = edited_data['index'].astype(str)
-                            
-                            # Fix missing or duplicate indices - ensure each row has a unique index
-                            import uuid
-                            
-                            # Check for and fix missing indices in original data
-                            missing_indices_orig = original_data['index'].isna() | (original_data['index'] == 'nan') | (original_data['index'] == 'None') | (original_data['index'] == '')
-                            if missing_indices_orig.any():
-                                # Batch update approach - much faster than individual updates
-                                updates_to_make = []
-                                
-                                for idx in original_data[missing_indices_orig].index:
-                                    new_uuid = str(uuid.uuid4())
-                                    original_data.loc[idx, 'index'] = new_uuid
-                                    
-                                    # Prepare batch update - use row position as a more reliable identifier
-                                    row_data = original_data.iloc[idx].to_dict()
-                                    row_data_without_index = {k: v for k, v in row_data.items() if k != 'index'}
-                                    
-                                    updates_to_make.append({
-                                        'row_position': idx,
-                                        'new_index': new_uuid,
-                                        'row_data': row_data_without_index
-                                    })
-                                
-                                # Execute bulk operations if we have any
-                                if updates_to_make:
-                                    try:
-                                        # Simplified approach: just update the index field directly by position
-                                        for i, update_info in enumerate(updates_to_make):
-                                            # Use a simple approach: find by multiple fields to identify the record uniquely
-                                            row_data = update_info['row_data']
-                                            filter_query = {}
-                                            
-                                            # Build a filter using available non-null fields
-                                            for key, value in row_data.items():
-                                                if value is not None and str(value).strip() != '' and str(value) != 'nan':
-                                                    filter_query[key] = value
-                                            
-                                            # Only update if we have a reasonable filter
-                                            if len(filter_query) >= 2:  # At least 2 fields to identify record
-                                                result = self.Equipment_select_options.update_one(
-                                                    filter_query,
-                                                    {"$set": {"index": update_info['new_index']}}
-                                                )
-                                    except Exception as e:
-                                        st.warning(f"Batch update encountered error: {e}")
-                            
-                            
-                            # Check for and fix missing indices in edited data
-                            missing_indices_edit = edited_data['index'].isna() | (edited_data['index'] == 'nan') | (edited_data['index'] == 'None') | (edited_data['index'] == '')
-                            if missing_indices_edit.any():
-                                for idx in edited_data[missing_indices_edit].index:
-                                    # Use the corresponding index from original_data if it was fixed
-                                    if idx < len(original_data):
-                                        edited_data.loc[idx, 'index'] = original_data.iloc[idx]['index']
-                                    else:
-                                        # New row, assign new UUID
-                                        edited_data.loc[idx, 'index'] = str(uuid.uuid4())
-                            
-                            # Since we have issues with UUID-based matching, let's use row-by-row comparison instead
-                            # This is more reliable for detecting changes in data editor scenarios
-                            
-                            update_count = 0
-                            insert_count = 0
-                            changes_detected = []
-                            
-                            # Compare row by row using pandas index positions
-                            min_rows = min(len(original_data), len(edited_data))
-                            
-                            # First pass: identify which rows actually have changes
-                            rows_with_changes = []
-                            for row_idx in range(min_rows):
-                                original_row = original_data.iloc[row_idx]
-                                edited_row = edited_data.iloc[row_idx]
-                                
-                                # Quick check if any column in this row has changes
-                                has_changes = False
-                                for col in edited_data.columns:
-                                    if (pd.isna(col) or str(col).lower() in ['nan', 'none', ''] or 
-                                        str(col).strip() == '' or col == 'index'):
-                                        continue
-                                    
-                                    if col in original_data.columns and col in edited_data.columns:
-                                        orig_val = "" if pd.isna(original_row[col]) or original_row[col] is None else str(original_row[col]).strip()
-                                        edit_val = "" if pd.isna(edited_row[col]) or edited_row[col] is None else str(edited_row[col]).strip()
-                                        
-                                        if orig_val != edit_val:
-                                            has_changes = True
-                                            break
-                                
-                                if has_changes:
-                                    rows_with_changes.append(row_idx)
-                            
-                            for row_idx in range(min_rows):
-                                original_row = original_data.iloc[row_idx]
-                                edited_row = edited_data.iloc[row_idx]
-                                
-                                # Find columns that actually changed
-                                changed_fields = {}
-                                
-                                # Get valid columns (exclude NaN, empty, or invalid column names)
-                                valid_columns = []
-                                for col in edited_data.columns:
-                                    # Skip invalid column names and the index column itself
-                                    if (pd.isna(col) or str(col).lower() in ['nan', 'none', ''] or 
-                                        str(col).strip() == '' or col == 'index'):
-                                        continue
-                                    valid_columns.append(col)
-                                
-                                for col in valid_columns:
-                                    # Safely check if column exists in both rows
-                                    if col in original_data.columns and col in edited_data.columns:
-                                        try:
-                                            # Get values and handle comparison more carefully
-                                            orig_val = original_row[col]
-                                            edit_val = edited_row[col]
-                                            
-                                            # Convert None/NaN to empty string for consistent comparison
-                                            if pd.isna(orig_val) or orig_val is None:
-                                                orig_val = ""
-                                            if pd.isna(edit_val) or edit_val is None:
-                                                edit_val = ""
-                                            
-                                            # Convert to strings and strip whitespace
-                                            orig_str = str(orig_val).strip()
-                                            edit_str = str(edit_val).strip()
-                                            
-                                            # Check if there's an actual change
-                                            if orig_str != edit_str:
-                                                changed_fields[col] = edit_val  # Use original edit_val (not the string version)
-                                                orig_display = "EMPTY" if orig_str == "" else f"'{orig_val}'"
-                                                edit_display = "EMPTY" if edit_str == "" else f"'{edit_val}'"
-                                                changes_detected.append(f"Row {row_idx}: {col} = {edit_display} (was {orig_display})")
-                                        except (KeyError, IndexError) as e:
-                                            # Skip problematic columns
-                                            continue
-                                
-                                # Only update if there are actual changes
-                                if changed_fields:
-                                    # Use the index value from the original row for the database update
-                                    index_value = original_row['index']
-                                    filter_query = {"index": index_value}
-                                    update_query = {"$set": changed_fields}
-                                    
-                                    result = self.Equipment_select_options.update_one(filter_query, update_query)
-                                    
-                                    if result.modified_count > 0:
-                                        update_count += 1
-                                    else:
-                                        st.warning(f"⚠️ Failed to update record at row {row_idx} (index {index_value}): {changed_fields}")
-                            
-                            # Handle new rows (if edited has more rows than original)
-                            if len(edited_data) > len(original_data):
-                                # Get the current maximum ID from the database to ensure unique sequential IDs
-                                max_id_in_db = 0
-                                try:
-                                    max_id_record = list(self.Equipment_select_options.find({}, {"ID": 1}).sort("ID", -1).limit(1))
-                                    if max_id_record:
-                                        max_id_in_db = max_id_record[0].get('ID', 0)
-                                except:
-                                    pass
-                                
-                                for row_idx in range(len(original_data), len(edited_data)):
-                                    new_row = edited_data.iloc[row_idx].to_dict()
-                                    # Generate a new index if needed
-                                    if pd.isna(new_row.get('index')) or str(new_row.get('index')).strip() == '':
-                                        new_row['index'] = str(uuid.uuid4())
-                                    # Assign sequential ID
-                                    if 'ID' not in new_row or pd.isna(new_row.get('ID')):
-                                        max_id_in_db += 1
-                                        new_row['ID'] = max_id_in_db
-                                    self.Equipment_select_options.insert_one(new_row)
-                                    insert_count += 1
-                            
-                            # Show detailed change detection for debugging
-                            if changes_detected:
-                                with st.expander("🔍 Changes Detected (Debug Info)"):
-                                    for change in changes_detected[:10]:  # Show first 10 changes
-                                        st.text(change)
-                                    if len(changes_detected) > 10:
-                                        st.text(f"... and {len(changes_detected) - 10} more changes")
-                            
-                            # Provide feedback
-                            messages = []
-                            if update_count > 0:
-                                messages.append(f"✅ Updated {update_count} records")
-                            if insert_count > 0:
-                                messages.append(f"➕ Added {insert_count} new records")
-                            
-                            if messages:
-                                st.success(" | ".join(messages))
-                                
-                                # Reload data to reflect changes
-                                self.Equipment_select_options_db_records = list(self.Equipment_select_options.find({}, {'_id': 0}))
-                                self.Equipment_select_options_db_df = pd.DataFrame(self.Equipment_select_options_db_records)
-                                
-                                if 'index' not in self.Equipment_select_options_db_df.columns:
-                                    self.Equipment_select_options_db_df['index'] = self.Equipment_select_options_db_df.index
-                                
-                                # Ensure ID column exists and has proper sequential values
-                                if 'ID' not in self.Equipment_select_options_db_df.columns:
-                                    self.Equipment_select_options_db_df['ID'] = [int(i) for i in range(1, len(self.Equipment_select_options_db_df) + 1)]
-                                
-                                # Sort by ID after reload
-                                if not self.Equipment_select_options_db_df.empty and 'ID' in self.Equipment_select_options_db_df.columns:
-                                    try:
-                                        self.Equipment_select_options_db_df = self.Equipment_select_options_db_df.sort_values(
-                                            by='ID', ascending=True, na_position='last'
-                                        ).reset_index(drop=True)
-                                    except Exception:
-                                        pass
-                                
-                                # Apply admin-saved column order after data reload
-                                self.Equipment_select_options_db_df = self._apply_column_order(self.Equipment_select_options_db_df, 'select_options')
-                            else:
-                                st.info("📋 No changes detected - nothing to save.")
-                    # ...existing code...
-                    #######################################################
-
+                        if self.select_options_system:
+                            # Use the Equipment Select Options system
+                            self.select_options_system.equipment_select_options_page()
+                        else:
+                            st.error("❌ Equipment Select Options system not available. Please ensure Equipment_Select_Options_Page.py is accessible.")
+                            st.info("💡 Please ensure Equipment_Select_Options_Page.py is accessible and properly configured.")
+                
                 elif st.session_state.current_page == "🗂️ Backup & Restore":
                     # Backup and Restore page (only for admin users)
                     if self._is_admin():
@@ -4795,14 +1482,9 @@ class EquipmentManagementApp:
                         
                         # Import and use the backup system
                         try:
-                            from backup_csv_for_db_restore import backup_restore_ui, integrate_auto_backup_into_main_app
+                            from backup_csv_for_db_restore import backup_restore_ui
                         except ImportError:
                             backup_restore_ui = None
-                            integrate_auto_backup_into_main_app = None
-                        
-                        # Integrate automatic backup check
-                        if integrate_auto_backup_into_main_app:
-                            integrate_auto_backup_into_main_app(self, backup_interval_hours=1)
                         
                         # Display backup and restore UI
                         if backup_restore_ui:
@@ -4820,43 +1502,42 @@ class EquipmentManagementApp:
                             st.warning("⚠️ Please change your password before accessing other features.")
                             self.auth_manager.password_change_page()
                         else:
-                            # Show user management interface
-                            self.auth_manager.user_management_page()
+                            # Import and use the standalone User Management system
+                            try:
+                                from User_Management_Page import UserManagementSystem
+                                user_mgmt = UserManagementSystem()
+                                user_mgmt.user_management_page()
+                            except ImportError:
+                                st.error("❌ User Management system not available. Please ensure User_Management_Page.py is accessible.")
+                                st.info("💡 Fallback: Using built-in user management functions.")
+                                self.auth_manager.user_management_page()
             else:
-                # For non-admin users, use tabs for Equipment Records and Equipment Select Options
+                # For non-admin users, show Equipment Records
                 with tab1:
-                    ##Equipment Records
-                    
                     # Check if user needs password change first
                     if self.auth_manager.user_needs_password_change(st.session_state.username):
                         st.warning("⚠️ You must change your password before accessing the system.")
                         self.auth_manager.password_change_page()
                         return
 
-                    # Use cached data instead of reloading from database
-                    if not hasattr(self, 'df') or self.df is None:
-                        # Fallback reload if cache is missing
-                        self._initialize_equipment_data()
-
-                    # Set db_df for compatibility
-                    self.db_df = self.df.copy() if hasattr(self, 'df') and not self.df.empty else pd.DataFrame()
-
-                    # Use the new Equipment_Filters function
-                    self.Equipment_Filters()
-
-
-
-            
+                    # Import and use the standalone Equipment Records system for non-admin users
+                    try:
+                        from Equipment_Records_Page import EquipmentRecordsSystem
+                        equipment_records = EquipmentRecordsSystem()
+                        equipment_records.equipment_records_page()
+                    except ImportError:
+                        st.error("❌ Equipment Records system not available. Please ensure Equipment_Records_Page.py is accessible.")
+                        st.info("💡 Please contact an administrator to resolve this issue.")
         else:
             # User not authenticated, show login page
-            self.auth_manager.login_page()
+            self.login_page()
 
 # Main execution
 if __name__ == "__main__":
     # Configure page settings once at the module level to avoid conflicts
     try:
         st.set_page_config(
-            page_title="ACT Lab Equipment",
+            page_title="ACT Lab Equipment - Fast",
             layout="wide",
             initial_sidebar_state="expanded"
         )
@@ -4866,5 +1547,5 @@ if __name__ == "__main__":
     
     # Create and run the application
     csv_filename = "ACT-LAB-Equipment-List.csv"
-    app = EquipmentManagementApp(csv_filename)
+    app = EquipmentManagementAppFast(csv_filename)
     app.run()

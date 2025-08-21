@@ -1,49 +1,38 @@
 
 
 
-fix filter
-still have old search
-fff
-
-All
-bbb
+the 🗂️ Backup & Restore seems to not backup if we are not in the page it self:
+    need to do seperate app for 🗂️ Backup to run seperatly 
 
 
+fix the hard coded->  run_automatic_backup_check(backup_interval_hours=0.1)
+add a switch button to move between adgrid and streamlit df
 
-append for Equipment Select Options
-Admin Downloads
+# -move select option page into a new python file
+# -slow process the gif is loading after few seconds and in some places is staying for long time until user click somthing .add thinking gif (same gif for all the waiting)  next to the clicked button until the operation is finished
 
-    # Web Management
-    # 💾 Save Equipment Column Order
+-when navigating between pages it is tacking to long cause the page it fuly loading from the begining can you use cookies for faster optimisation that it wont be neded to fully load the pages when moving between them
 
-    # 🔧 Save Equipment Filter Order
+-make pages independent so if page is not functioning just print error to the page
 
-
-#get warning for 🗑️ Delete Column from Equipment Select Options DB befor deletion
-
-# Equipment Select Options backup should save also index, or when inseting new data give it a new uuid
-
-# remove prints:
-    # Some rows were removed. Processing deletions...
-
-# 🔍 Filtered view detected - Only updating/adding records, not deleting filtered-out records for safety.
-
-# DONE: when appending column to Equipment Select Options update the column that in the Equipment Records that can use only from the dropdown selecting - Auto-sync implemented with manual sync option
-
-
-when clicking on buttuon the web change color cause it is thinking or refreshing or doing rerun but the user can stil click on somthing else cause it is not changing the fu
+seperate the pages to difrent undependent web page for the restore and user mangment
+# -when clicking on buttuon the web change color cause it is thinking or refreshing or doing rerun but the user can stil click on somthing else cause it is not changing the fu
 
 remove reruns...
 make ui look better by relocate buttons###
 add an option that if admin deny user signup it can send also a message with a reson for why the user got denyied
 
-clean the code:
-"☑️ Select All Visible" remove from filter_equipment to some function
+# clean the code:
+# "☑️ Select All Visible" remove from Equipment_Filters to some function
 
 
 
+##########################################################################################
 
+##########################################################################################
+ allway aveliable: Rename Column in Equipment DB but the button whitin allway aveliable also for ✏️ Rename Column in Equipment Select Options DB
 
+ remove  🔍 Debug Information after adding row from select option page
 
 it is taking long time for tabs to load like 👥 User Management 
 Add New Column to Equipment DB also for tech permissions?
@@ -121,12 +110,38 @@ DONE:
 
 # add for singup option a filling the password alredy
 
+# append for Equipment Select Options
+# Admin Downloads
+
+    # Web Management
+    # 💾 Save Equipment Column Order
+
+    # 🔧 Save Equipment Filter Order
+
+
+# put in a python file general_functions.py and import the file to the files that need thoes functions
+# '_load_column_order'
+# is_admin
+# _apply_column_order function 
 
 
 
+#get warning for 🗑️ Delete Column from Equipment Select Options DB befor deletion
 
+# Equipment Select Options backup should save also index, or when inseting new data give it a new uuid
 
+# remove prints:
+    # Some rows were removed. Processing deletions...
 
+# 🔍 Filtered view detected - Only updating/adding records, not deleting filtered-out records for safety.
+
+# DONE: when appending column to Equipment Select Options update the column that in the Equipment Records that can use only from the dropdown selecting - Auto-sync implemented with manual sync option
+
+# when i get into the Equipment Select Options page and click on the adgrid df and try to insert data and click enter, the page is doing refresh and the insertd data is getting deleted at first time but on the secund time i can insert data.
+# please fix it so user interface will be good.
+# when user click on the df for inserting data the page shuldn not refresh
+# when selecting rows the indicator of row selected must be relaible,
+# even make a side python file the bring up a df for debug for not gettimg the complication of that issue for Reference point.
 
 
 ###################################
